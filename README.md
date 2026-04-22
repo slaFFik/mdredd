@@ -39,7 +39,6 @@ A local CLI tool for evaluating and comparing different versions of `CLAUDE.md` 
 ---
 
 ### Open questions to revisit
-- Final package name (check npm availability)
 - Whether to support parallel runs or sequential-only in v1
 - How much of the Claude Code system prompt to preserve vs. replace when injecting variants (`--bare` + `--system-prompt-file` vs. temp dir approach)
 - Judge model UX — automatic after each run, or manually triggered?
