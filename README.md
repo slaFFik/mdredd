@@ -1,44 +1,43 @@
-## Agent Eval Tool — High-Level Plan
+# mdredd
 
-### What it is
-A local CLI tool for evaluating and comparing different versions of `CLAUDE.md` / skill files against the same prompt, using Claude Code as the underlying agent.
+> A/B test your Claude Code instruction files.
 
-### How it works
-- User runs `comparator` (or final name) from their project directory
-- A Node.js server starts, opens `http://localhost:<PORT>` in the default browser
-- The UI lets them configure and run evaluations, results persist as local JSON files
+Evaluate different versions of your `CLAUDE.md`, skills, and agent files side-by-side using Claude Code itself. Iterate on your instructions with evidence instead of vibes.
 
----
+## The problem
 
-### Stack
-- **Runtime:** Node.js
-- **CLI entry:** single `bin` script, published to npm as a global install
-- **Frontend:** React (bundled into the package as `dist/`, served statically by the Node server)
-- **Browser launch:** `open` package
-- **Port selection:** dynamic (avoid hardcoded 3000)
-- **Persistence:** flat JSON files in the working directory (no database)
-- **Agent execution:** spawns `claude` subprocesses, captures stdout/stderr
+You edit `CLAUDE.md` hoping Claude will follow instructions better. You run a prompt. The response seems... different? Hard to tell if it's actually better — Claude varies from run to run, and you're comparing today's output against a fuzzy memory of yesterday's.
 
----
+Without a structured way to compare variants, every instruction tweak is a guess.
 
-### Core features (v1 scope)
-- Auto-detect `CLAUDE.md` and skill files in the current working directory
-- UI to pick model, enter prompt, select which instruction file variants to test
-- Run variants sequentially (temp dir approach — each run gets its own dir with the variant file placed as `CLAUDE.md`)
-- Capture and display outputs side by side
-- Optional: judge model run (a separate Claude call that scores/compares the two outputs)
+## What mdredd does
 
----
+mdredd runs two (or more) versions of the same instruction file against the same prompt, in parallel, and shows you the full results side by side. An optional judge model scores them on a rubric (Accuracy, Completeness, Instruction Adherence, Clarity) and picks a winner.
 
-### Key constraints
-- Claude Code must already be installed on the machine (`claude` available in PATH)
-- No API key management — piggybacks on the user's existing Claude auth
-- Works on macOS and Linux; WSL is a known edge case (print URL as fallback)
-- Claude-only at first (no Gemini CLI or Codex support yet)
+## What you can do with it
 
----
+- Compare two versions of your project's `CLAUDE.md` on the same prompt
+- See whether a skill you wrote actually shapes the output the way you expect
+- A/B test different wordings in an agent definition
+- Inspect full transcripts — tool calls, reasoning, final answer — for every variant
+- Get a structured rubric score and winner from a judge model
 
-### Open questions to revisit
-- Whether to support parallel runs or sequential-only in v1
-- How much of the Claude Code system prompt to preserve vs. replace when injecting variants (`--bare` + `--system-prompt-file` vs. temp dir approach)
-- Judge model UX — automatic after each run, or manually triggered?
+## How it fits your workflow
+
+- Run `mdredd` from any project directory
+- A browser UI opens locally with two variant columns (add more with `+`)
+- Paste or pick instruction-file variants; write a prompt per column; click Run
+- Each variant runs in an isolated sandbox — your source files stay untouched
+- Results stream live; judge scores appear once runs complete
+
+## Requirements
+
+- [Claude Code](https://www.anthropic.com/claude-code) installed and authenticated (`claude` available in your shell)
+- Node.js
+- macOS or Linux
+
+You don't need an API key — mdredd piggybacks on your existing Claude Code auth.
+
+## Status
+
+Early development.
