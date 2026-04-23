@@ -2,37 +2,49 @@
 
 ## Context
 
-Build a local CLI + browser UI for comparing variants of Claude Code instruction files (`CLAUDE.md`, skills, agents). The user runs `mdredd` in any working directory; a Node server picks a free port, launches a React UI in the default browser, and lets them iterate on instruction-file variants side-by-side. Each column spawns its own `claude -p` subprocess against a per-column prompt and streams the transcript live. An optional judge model then scores the columns on a fixed rubric and picks a winner. No API-key management — the tool piggybacks on the user's existing `claude` auth. Persistence is flat JSON on disk. v1 is Claude-only; macOS and Linux.
+Build a local CLI + browser UI for comparing variants of Claude Code instruction files (`CLAUDE.md`, skills, agents). The user runs `mdredd` in any working directory; a Node server picks a free port, launches a React UI in the default browser, and lets them iterate on instruction-file variants side-by-side. Each column spawns its own `claude -p` subprocess against a per-column prompt and streams the transcript live. A per-variant judge scores each completed run on a rubric. No API-key management — the tool piggybacks on the user's existing `claude` auth. Persistence is flat JSON on disk under `<cwd>/agents/mdredd/`. v1 is Claude-only; macOS and Linux.
 
-The repo currently contains only README.md and LICENSE. Everything below is new code.
+**Safety model.** Read-only mode is the default and uses a claude CLI tool allowlist (`Read,Glob,Grep,WebSearch,WebFetch`) that simply doesn't include any write/execute tool — so nothing can mutate the user's project, full stop. Write mode additionally includes `Write,Edit` constrained by `.claude/settings.json` permission rules to a per-run `outputs/` directory. `Bash`, `Task`, `NotebookEdit`, and MCP are absent from both allowlists in v1. The "your source files stay untouched" promise is delivered by the allowlist, not by polite instructions to the model.
+
+The repo currently contains only README.md, LICENSE, and docs/PLAN.md. Everything below is new code.
 
 ---
 
-## Decisions locked during interview
+## Decisions locked
 
 - **Scope**: `CLAUDE.md` + `.claude/skills/<name>/SKILL.md` + `.claude/agents/<name>.md`.
-- **Variant sources**: file picker (from disk) + paste/edit in UI textarea.
-- **Injection**: sandbox temp dir per run; variant written to the correct path inside the sandbox.
-- **Project exposure**: user's cwd symlinked into the sandbox with gitignore-style excludes.
-- **Write policy**: redirect writes to a per-run `scratch/` subdir via claude permission rules; source files never modified.
-- **Concurrency**: variants run in parallel (all at once).
-- **Turn model**: single prompt per column, natural agentic loop.
-- **Output capture**: full transcript (messages + tool calls + tool results).
-- **Columns**: 2 by default, `+` button to add more; each column has independent Run/Stop.
-- **Prompt**: per-column prompt field (each variant has its own).
-- **Model**: default-model dropdown with per-variant override.
-- **Judge**: toggle per eval (default on); rubric = Accuracy, Completeness, Instruction Adherence, Clarity; + winner + short rationale; judge model = Opus; re-fires automatically after every variant completion.
-- **Storage**: one directory per eval under `./agents/mdredd/evals/<eval-id>/`.
-- **History UI**: none; past evals live on disk only.
-- **Startup**: each session starts blank.
-- **Safety cap**: 50-turn hard cap per run, enforced by our runner via stream-json event counting (see note below).
-- **Cancel**: per-column Stop button kills the subprocess.
+- **Variant source**: paste/edit in UI textarea is primary; an upload button reads a file and drops its content into the textarea.
+- **Mode toggle (per-eval)**: **Read-only** (default, counselors-parity) or **Write**. Applies to all columns in the current UI state.
+- **Tool allowlist**:
+  - Read-only: `Read,Glob,Grep,WebSearch,WebFetch`.
+  - Write: `Read,Glob,Grep,WebSearch,WebFetch,Write,Edit` + per-run `settings.json` restricting `Write`/`Edit` to `../outputs/**` (relative to claude's cwd; verified working).
+  - `Bash`, `Task`, `NotebookEdit`, MCP: not in either allowlist in v1. Expert-mode Bash toggle deferred to v2.
+- **Concurrency**: all columns run in parallel. Hard column cap is 3; no queue.
+- **Columns**: 2 default, `+` adds up to 3; each column has independent Run/Stop.
+- **Prompt**: per-column prompt field, independent per variant.
+- **Model**: default-model dropdown with per-column override.
+- **Judge (per-variant)**: toggle per eval (default on). Fires once per `completed` or `truncated` run against that run's transcript. Rubric = **Accuracy, Completeness, Adherence, Clarity**, each scored 0–100 on a 5-band anchor scale (0/25/50/75/100). No "winner" — each variant gets an independent scorecard; the human compares. **Judge model = Haiku** (mirrors the pattern in claude's own `code-review` skill: Haiku is cheap, fast, and consistent for rubric-driven scoring). Judgment stored at `<run>/judge.json`.
+- **Storage root**: `<cwd>/agents/mdredd/` (in-project, auto-gitignored).
+- **History UI**: none; run folders are chronologically sorted on disk. Within a session, re-running a column creates a new run folder rather than overwriting.
+- **State restoration**: on boot, the server reads `session.json` + each referenced run folder and restores the full UI (prompts, variant text, transcripts, outputs, judge scores) from disk. Nothing is lost on server restart or browser refresh. A **Start new** top-bar button (confirmation dialog) wipes every run folder and `session.json` under `agents/mdredd/` (preserves `.gitignore` and `.lock`), returning to a blank slate.
+- **Editing lock while running**: while any column is in a non-terminal state (`preparing`, `streaming`), all editable surfaces are disabled — variant textareas, prompt fields, model dropdowns, mode toggle, judge toggle, and idle columns' Run buttons. Only active columns' Stop buttons and Start new remain clickable. Unlocks as soon as every column reaches a terminal state.
+- **Safety cap**: defense-in-depth — two independent caps (turns, wall-clock). See § Safety cap.
+- **Cancel**: per-column Stop kills the subprocess (SIGTERM, 2s grace, SIGKILL).
 - **Progress UI**: live streaming via `claude -p --output-format stream-json --include-partial-messages`.
-- **Stack**: TypeScript + Vite + npm; React 18; small Node HTTP server; `open` + `get-port`.
+- **Stack**: TypeScript + Vite + npm; React 18; small Node HTTP server bound to `127.0.0.1`; `open` + `get-port` + `ignore` + `ajv`.
 
-### Note on the safety cap
+### Safety cap
 
-We agreed on `max-turns=50` during the interview, and we explicitly rejected cost-based caps (no basis for picking a dollar value without workload data). Running `claude --help` confirms `--max-turns` is not a flag in the current `claude` CLI. So we enforce the cap ourselves: `claude -p --output-format stream-json` emits one assistant-message event per turn; the runner keeps a counter and sends SIGTERM to the subprocess when it reaches 50. Same intent (emergency brake for runaway variants), implemented in our wrapper — no `claude` flag needed, and no USD guessing.
+Two independent caps; on any trip → SIGTERM + 2s grace + SIGKILL → `status: "truncated"` with `truncationReason` recorded.
+
+| Cap | Default | Source |
+|-----|---------|--------|
+| Turns | 50 | Exact event, below |
+| Wall clock | 5 min | Subprocess start time |
+
+**Turn counting**: increment on `{"type":"message_stop"}` when the corresponding `message_start` had `role: "assistant"` and `stop_reason !== "tool_use"` (a completed non-tool turn). Partial/delta events do not count. Novel event types → one warning per type per run, not counted.
+
+`--max-turns` is not a flag on the current `claude` CLI, so the runner parses stream-json and enforces the turn cap itself. Wall-clock is defense-in-depth against event-schema drift.
 
 ---
 
@@ -40,163 +52,399 @@ We agreed on `max-turns=50` during the interview, and we explicitly rejected cos
 
 ```
 mdredd/
-├── bin/mdredd.js                 # CLI entry: resolves port, starts server, launches browser
+├── bin/mdredd.js                 # CLI entry: port, server, browser launch
 ├── src/server/
-│   ├── index.ts                  # bootstrap, port selection (get-port), static serve
-│   ├── routes.ts                 # /api endpoints; SSE stream for run events
-│   ├── runner.ts                 # spawn claude subprocess, parse stream-json, count turns, forward events
-│   ├── sandbox.ts                # build sandbox dir, place variant, symlink project, write permissions settings
-│   ├── judge.ts                  # build judge prompt, spawn judge claude with --json-schema, store result
-│   └── storage.ts                # read/write eval directory under ./agents/mdredd/evals/
+│   ├── index.ts                  # bootstrap, get-port, 127.0.0.1 bind, static serve
+│   ├── preflight.ts              # detect claude CLI, auth, required flags, cwd guard
+│   ├── security.ts               # Origin check, session token
+│   ├── routes.ts                 # /api endpoints; SSE stream
+│   ├── runner.ts                 # spawn claude, parse stream-json, enforce caps
+│   ├── sandbox.ts                # build run folder, mirror project, place variant, settings.json
+│   ├── slug.ts                   # Haiku-summary + content-hash slug derivation
+│   ├── judge.ts                  # spawn per-variant judge (Haiku), ajv-validate, store
+│   └── session.ts                # session state + boot-time state restoration
+├── src/shared/
+│   └── schemas/                  # TS types + ajv validators, shared by server + client
 ├── src/web/
-│   ├── App.tsx                   # top-level layout; global judge toggle; column row
+│   ├── App.tsx                   # layout; mode toggle; judge toggle; Start new
 │   ├── components/
-│   │   ├── VariantColumn.tsx     # settings (variant source, model, name) + prompt + Run/Stop + transcript
-│   │   ├── VariantEditor.tsx     # file picker or inline textarea
+│   │   ├── VariantColumn.tsx
+│   │   ├── VariantEditor.tsx     # textarea + upload button
 │   │   ├── PromptField.tsx
-│   │   ├── TranscriptView.tsx    # renders messages / tool calls / tool results with collapsibles
-│   │   └── JudgePanel.tsx        # rubric scores × columns, winner highlight, rationale
-│   └── lib/api.ts                # fetch + EventSource client
-├── dist/                         # prebuilt web bundle (shipped via npm)
-├── package.json                  # name "mdredd", bin entry, files whitelist
+│   │   ├── TranscriptView.tsx
+│   │   └── JudgeCard.tsx         # single-variant scorecard (no winner logic)
+│   └── lib/api.ts                # fetch + EventSource client with Last-Event-ID
+├── dist/                         # prebuilt web bundle
+├── package.json
 ├── vite.config.ts
 ├── tsconfig.json
-└── README.md                     # existing; update with usage later
+└── README.md
 ```
 
 ### Dependencies
 
-- Runtime: `express` (tiny HTTP + SSE), `get-port`, `open`, `ignore` (gitignore matching).
+- Runtime: `express`, `get-port`, `open`, `ignore`, `ajv`, `proper-lockfile`.
 - Dev: `vite`, `@vitejs/plugin-react`, `typescript`, `react`, `react-dom`, `@types/*`.
+
+---
+
+## Preflight & security
+
+### Preflight (server startup)
+
+1. `claude --version` — fail fast if not installed.
+2. `claude --help` parsed for required flags: `--output-format stream-json`, `--include-partial-messages`, `--tools`, `--allowedTools`, `--strict-mcp-config`, `--setting-sources`, `--model`.
+3. Auth smoke: trivial cap-bounded `claude -p`. On failure, UI shows a pointer to `claude login`.
+4. **cwd guard**: refuse if cwd is `$HOME`, `/`, or inside an `agents/mdredd/` directory (walk upward). Require cwd to contain a project marker (`.git/`, `package.json`, `composer.json`, `Cargo.toml`, `pyproject.toml`) or `--force`.
+5. **Instance lock**: refuse to start a second `mdredd` with the same cwd (`.lock` file at `<cwd>/agents/mdredd/.lock` with pid + port; stale-lock recovery if pid is gone).
+6. **Auto-gitignore**: if `<cwd>/agents/mdredd/.gitignore` doesn't exist, write `*\n!.gitignore\n` so the user's `git status` stays clean.
+7. **Abandoned-run recovery**: scan existing run folders; any with `status ∈ {"preparing","streaming"}` and no live PID get rewritten to `status: "abandoned"` before the UI boots.
+
+### Security
+
+- HTTP server binds `127.0.0.1` only, never `0.0.0.0`.
+- State-mutating POSTs require `Origin: http://127.0.0.1:<port>` → 403 on mismatch.
+- 32-byte random session token generated at startup, embedded in the launched URL as `?t=<token>`, required on every API call.
+
+---
+
+## Column state machine
+
+```
+idle
+  → (Run clicked)            → preparing     (slug resolution, sandbox build)
+  → (subprocess spawned)     → streaming
+    → (natural completion)   → completed     → judge fires
+    → (cap trips, SIGTERM)   → truncated     → judge fires
+    → (Stop clicked)         → cancelled     (no judge)
+    → (spawn/parse fatal / exit != 0) → errored  (no judge)
+  → (variant reset / column removed) → idle
+  → (server restart observed mid-run) → abandoned  (terminal; set on disk at boot)
+```
+
+Illegal transitions are runtime errors. Re-running a column in `preparing`/`streaming` → 409.
+
+---
+
+## Slug derivation
+
+Per-run folder name: `<timestamp-ms>-<slug-base>-<content-hash>`.
+
+- **Timestamp-ms**: ISO-ish with millisecond precision, e.g. `2026-04-23T15-30-12-345`. Filesystem-safe chars only.
+- **Slug base**:
+  1. If the column's "variant name" field is filled → kebab-case it (≤32 chars).
+  2. Else → spawn Haiku with *"Produce a 2–4 word kebab-case slug summarizing this variant. Output only the slug."* against the variant content. ~1s, blocking on Run.
+  3. If Haiku fails (network/auth/error) → literal `variant`.
+- **Content hash**: 6-char SHA-256 over UTF-8 LF-normalized variant content.
+- **Collision (same full folder name already exists)**: append `-1`, `-2`. Expected never to trigger with ms-precision timestamps.
+- Path-traversal guard: reject slug bases containing `..`, `/`, or leading `.` before assembly.
 
 ---
 
 ## Per-variant execution flow
 
 1. User clicks **Run** on column N.
-2. Server assigns `eval-id` (ISO timestamp slug) on first Run of the session; writes/updates `config.json` with per-column state.
-3. Server creates sandbox: `./agents/mdredd/evals/<eval-id>/runs/<variant-slug>/sandbox/`.
-4. Server places the variant file at the right path in the sandbox:
-   - CLAUDE.md variant → `<sandbox>/CLAUDE.md`
-   - Skill variant → `<sandbox>/.claude/skills/<name>/SKILL.md`
-   - Agent variant → `<sandbox>/.claude/agents/<name>.md`
-5. Server symlinks user's cwd into `<sandbox>/project/`, filtered through `.gitignore` (via `ignore` package) + a hard exclusion of `./agents/mdredd/` to prevent recursion.
-6. Server writes `<sandbox>/.claude/settings.json` to redirect writes to scratch:
+2. Server validates: prompt non-empty; variant content non-whitespace; column not already running; no column is in a non-terminal state if editing was locked at click time; total columns ≤ 3.
+3. Resolve slug (see § Slug derivation). Block briefly if Haiku is required.
+4. Create run folder `<cwd>/agents/mdredd/<timestamp>-<slug-base>-<hash>/`. Write `config.json` (initial state, prompt hash, variant hash, mode, model, status=`preparing`). Write `variant.md` snapshot.
+5. Build sandbox inside the run folder:
+   - `<run>/project/` — claude's cwd for this run
+   - `<run>/outputs/` — write target (created even in read-only mode; stays empty)
+6. Mirror user's cwd into `<run>/project/` with per-top-level-entry symlinks, filtered by the user's `.gitignore` plus a hard exclusion of `agents/mdredd/**` and the variant's own canonical path. Refuse on symlink cycles.
+7. Place variant at its canonical path inside `<run>/project/`:
+   - CLAUDE.md → `<run>/project/CLAUDE.md`
+   - Skill → `<run>/project/.claude/skills/<name>/SKILL.md`
+   - Agent → `<run>/project/.claude/agents/<name>.md`
+
+   Skill/agent name comes from the uploaded file's path when available, otherwise from an explicit name field in the column header.
+8. **Write mode only**: write `<run>/project/.claude/settings.json`:
    ```json
    {
      "permissions": {
-       "allow": ["Write(./scratch/**)", "Edit(./scratch/**)"],
-       "deny": ["Write(**)", "Edit(**)", "NotebookEdit"]
+       "allow": ["Write(../outputs/**)", "Edit(../outputs/**)"],
+       "deny":  ["Write(**)", "Edit(**)"]
      }
    }
    ```
-7. Server spawns:
+   Verified: the `../outputs/**` rule works when claude's cwd is `<run>/project/`. Policy denials do not surface in the result JSON's `permission_denials` field — the runner observes denials via stream-json events instead.
+9. Spawn:
    ```
    claude -p "<prompt>" \
      --output-format stream-json \
      --include-partial-messages \
      --model <chosen-model> \
+     --tools        "<allowlist-for-mode>" \
+     --allowedTools "<allowlist-for-mode>" \
+     --strict-mcp-config \
      --setting-sources project
    ```
-   with `cwd = <sandbox>`.
-8. Server parses stream-json line-by-line; forwards each event over SSE to the column. Counts assistant-message events; if the count reaches 50, sends SIGTERM to the subprocess and marks the run "truncated" in the transcript metadata.
-9. On subprocess exit, server writes the full transcript to `runs/<variant-slug>.json` with metadata (model, duration, exit code, turn count, truncated flag).
-10. If the eval's judge toggle is on and ≥2 columns now have completed runs, trigger the judge (see below).
+   - `cwd` = `<run>/project/`
+   - `env` = `process.env` with `CLAUDE_*` overrides and `NODE_OPTIONS` stripped
+   - `stdin` closed (kill after 15s if the process blocks on stdin — likely an interactive auth re-challenge)
+   - `stderr` captured to `<run>/stderr.log`
+10. Parse stream-json line-by-line into normalized events, forwarded over SSE with a monotonic `seq`. Raw lines mirrored to `<run>/stream.jsonl`. Unparseable lines → `<run>/parse-errors.log`; runner continues. Novel event types logged once per type per run.
+11. Turn counter + wall-clock timer run in parallel. Any trip → SIGTERM + 2s grace + SIGKILL → `status: "truncated"` with `truncationReason ∈ {"turns","wallclock"}`.
+12. On subprocess exit, write `<run>/transcript.json` (normalized events + metadata). Transition column to terminal state.
+13. If status is `completed` or `truncated` AND judge is enabled → fire judge for this run (see § Judge flow).
 
 ### Cancel semantics
 
-Stop button sends SIGTERM to the subprocess; server waits briefly, then SIGKILL if needed. Partial transcript is written with `status: "cancelled"`. Column UI shows "Cancelled at turn N". Does not trigger the judge.
+Stop button → SIGTERM → 2s wait → SIGKILL if still alive. Partial transcript persisted with `status: "cancelled"`. Column shows "Cancelled at turn N". Cancel does not trigger the judge.
 
 ---
 
 ## Judge flow
 
-1. Server assembles a judge prompt: the per-column prompts, each column's final message + tool-call summary, and the four rubric criteria.
-2. Spawns judge:
+The judge is **per-variant**, powered by **Haiku**. It runs independently for each completed/truncated run; no debouncing, no generation IDs, no cross-column awareness.
+
+1. When a run reaches `completed` or `truncated`, fire a judge subprocess for that run.
+2. Judge input (explicit caps to avoid context blowouts):
+   - The prompt (verbatim, capped at 4 KB).
+   - The variant content (verbatim, capped at 8 KB).
+   - Final assistant message (capped at 4 KB with mid-body ellipsis).
+   - Tool-call summary: one line per tool use, `tool_name(arg_summary) → result_summary`, each summary capped at 200 chars.
+   - Write mode: a manifest of files in `<run>/outputs/` (paths + sizes; no content).
+   - Rubric: **Accuracy, Completeness, Adherence, Clarity**, each scored 0–100 using the 5-band anchor scale below.
+3. The judge prompt includes a verbatim scoring rubric (mirroring claude's `code-review` skill pattern) plus an explicit instruction: *"Score Accuracy conservatively. You do not have ground truth about the user's codebase; if you cannot verify correctness from the evidence in the transcript, score Accuracy ≤ 50 and explain the uncertainty in the rationale."* Anchor points:
+   - **0** — Criterion is not satisfied at all.
+   - **25** — Barely satisfied; major gaps.
+   - **50** — Partially satisfied; meaningful gaps that a reviewer would flag.
+   - **75** — Largely satisfied; minor gaps at most.
+   - **100** — Fully satisfied with no observable gaps.
+4. Spawn:
    ```
-   claude -p "<judge-prompt>" --model opus --output-format json \
-     --json-schema '<rubric-schema>'
+   claude -p "<judge-prompt>" --model haiku \
+     --output-format json \
+     --tools        "" \
+     --allowedTools "" \
+     --strict-mcp-config
    ```
-   where the JSON schema enforces `{ columns: [{ name, scores: { accuracy, completeness, adherence, clarity } }], winner, rationale }`.
-3. Parses the structured output; stores at `./agents/mdredd/evals/<eval-id>/judge.json`.
-4. Server pushes a "judge updated" event over SSE; JudgePanel re-renders.
-5. Every subsequent variant completion triggers a fresh judge invocation (auto re-score). Previous `judge.json` is overwritten (history is via the fact that old evals are frozen directories).
+   Judge uses no tools — it reads its inputs from the prompt and emits structured JSON. Output shape enforced via prompt + ajv validation (with `--json-schema` fallback if supported by the installed CLI).
+5. On schema failure, retry once with an error-explaining follow-up. Still invalid → `judge.json.status = "errored"` with the error surfaced in the UI; the column's run results are untouched.
+6. Write `<run>/judge.json`. Push `judge.updated` (or `judge.errored`) for that column over SSE.
+
+UI: the JudgeCard for each column renders 4 numeric scores (0–100) + short rationale. There is no "winner highlight" — the human compares scorecards visually.
 
 ---
 
 ## UI shape
 
-Single scrollable page:
+Single scrollable page.
 
-- **Top bar**: current `eval-id`, **New eval** button (clears state to blank), **Judge ON/OFF** toggle.
-- **Column row** (horizontally scrollable if >3):
-  - Header: variant name input, variant source selector (file-picker or textarea), model dropdown (default + per-column override), variant-type indicator (CLAUDE.md / skill / agent, inferred from file or user-selected for paste).
-  - Prompt textarea (per column — each variant has its own prompt).
-  - **Run / Stop** button (toggles by state). Progress readout when running: `turn N · mm:ss · last tool: <Name>`.
-  - Transcript below: live streaming, with collapsible sections for thinking blocks, tool calls, tool results; final message shown expanded. Truncation badge if the turn cap fired.
-- **Judge panel** (below columns): 4×N rubric table, winner highlighted, rationale text. Hidden until the judge has produced output for the current state.
+**Top bar**: **Mode: Read-only / Write** (disabled while any column is running), **Judge ON/OFF** (disabled while any column is running), **Start new** (confirm dialog → cancels running columns, then deletes every run folder + `session.json` under `agents/mdredd/`, preserving `.gitignore` and `.lock`).
+
+**Column row** (up to 3 columns; `+` button hidden at cap and hidden while any column is running):
+- Header: variant name input (empty triggers Haiku slug), variant source (textarea + upload button), variant-type indicator (CLAUDE.md / skill / agent, inferred or explicit), skill/agent name field when applicable, model dropdown.
+- Prompt textarea.
+- **Run / Stop** button. Run is disabled when (a) this column is not idle, or (b) any other column is in a non-terminal state. Stop is enabled only while this column is running. Progress readout: `turn N · mm:ss · last tool: <Name>`.
+- Transcript: live streaming; collapsible sections for thinking, tool calls, tool results; final message expanded. Badges for truncation (with reason) and cancellation.
+- Outputs list (Write mode only): files in `<run>/outputs/` with paths + sizes; clicking opens content.
+- Scorecard (after judge fires): 4 rubric scores (0–100) + rationale.
+
+**Editing lock**: all editable fields (variant textareas, prompt fields, model dropdowns, variant name, mode/judge toggles, + button) become read-only whenever any column is in `preparing` or `streaming`. Only Stop buttons on active columns and Start new remain interactive. Lock releases as soon as every column is in a terminal state (`completed`/`cancelled`/`truncated`/`errored`/`abandoned`/`idle`).
+
+**State restoration**: on initial page load and after any SSE reconnect, the client `GET /api/state` returns the full session: column configs, each column's current-run folder path, transcript events, outputs file list, and judge payload (all reassembled from disk — `session.json` + each run folder). SSE reconnects via `Last-Event-ID` for delta updates only; the initial snapshot always comes from disk.
 
 ---
 
 ## Persistence layout
 
 ```
-./agents/mdredd/
-└── evals/
-    └── <eval-id>/                         # ISO-ish slug, e.g. 2026-04-22T15-30-12
-        ├── config.json                    # per-column prompt/variant ref/model; judge toggle
-        ├── variants/
-        │   ├── <variant-slug>.md          # snapshot at run time
-        │   └── ...
-        ├── runs/
-        │   ├── <variant-slug>.json        # full transcript + metadata + status
-        │   └── ...
-        └── judge.json                     # current rubric scores + winner + rationale
+<cwd>/agents/mdredd/
+├── .gitignore                              # auto-written: "*" plus "!.gitignore"
+├── .lock                                   # pid + port of running instance
+├── session.json                            # column → run mapping, mode, judge toggle, variant name/content/prompt/model for each column
+└── 2026-04-23T15-30-12-345-concise-style-a1b2c3/   # one run
+    ├── config.json                         # prompt/variant ref/model/mode/status/timestamps/truncation
+    ├── variant.md                          # variant content snapshot
+    ├── transcript.json                     # normalized events + metadata
+    ├── stream.jsonl                        # raw stream-json for post-mortem
+    ├── stderr.log
+    ├── parse-errors.log                    # any unparseable lines (may be empty)
+    ├── judge.json                          # per-variant judgment (present when judge fired)
+    ├── project/                            # claude's cwd for this run
+    │   ├── CLAUDE.md                       # the variant (or skill/agent path)
+    │   ├── .claude/settings.json           # write mode only
+    │   ├── src → <cwd>/src                 # per-top-level symlinks (gitignore-filtered)
+    │   ├── package.json → <cwd>/package.json
+    │   └── …
+    └── outputs/                            # model-produced files (present in both modes; empty in read-only)
 ```
 
-Sandbox directories (`runs/<variant-slug>/sandbox/`) live alongside but are ephemeral — they can be cleaned up on a toggle later; v1 keeps them for debuggability.
+Atomic writes via `*.tmp` + `rename`. File-level locks via `proper-lockfile` where multiple processes touch the same file.
+
+**Start new**: confirms with the user, cancels all running runs, then removes every entry under `agents/mdredd/` except `.gitignore` and `.lock`. Server rewrites a fresh `session.json` with default column defaults.
+
+---
+
+## Data schemas
+
+TS types + ajv validators live under `src/shared/schemas/`. JSON Schemas are generated from these.
+
+### `session.json`
+```ts
+{
+  mode: "read-only" | "write";
+  judgeEnabled: boolean;
+  defaultModel: string;
+  cwd: string;                               // absolute
+  columns: Array<{
+    id: string;                              // "col-1"
+    variantName: string;                     // user-entered; empty → Haiku summary at run time
+    variantType: "CLAUDE.md" | "skill" | "agent";
+    skillOrAgentName: string | null;
+    variantContent: string;                  // current draft; restored on reload
+    prompt: string;                          // current draft; restored on reload
+    model: string;
+    currentRunFolder: string | null;         // relative path under agents/mdredd/
+  }>;
+}
+```
+
+### `config.json` (per-run)
+```ts
+{
+  runFolder: string;                         // the folder name itself
+  columnId: string;
+  variantName: string;
+  variantType: "CLAUDE.md" | "skill" | "agent";
+  skillOrAgentName: string | null;
+  variantContentSha256: string;
+  promptSha256: string;
+  model: string;
+  mode: "read-only" | "write";
+  status: "preparing" | "streaming" | "completed" | "cancelled" | "truncated" | "errored" | "abandoned";
+  startedAt: string;
+  endedAt: string | null;
+  turnCount: number;
+  wallClockMs: number;
+  truncationReason: "turns" | "wallclock" | null;
+  exitCode: number | null;
+  signal: string | null;
+}
+```
+
+### `transcript.json` (per-run)
+```ts
+{
+  runFolder: string;
+  events: NormalizedEvent[];                 // shape matches § SSE event schema payloads
+  status: Status;
+  startedAt: string;
+  endedAt: string | null;
+  turnCount: number;
+  wallClockMs: number;
+  truncationReason: "turns" | "wallclock" | null;
+}
+```
+
+### `judge.json` (per-run)
+```ts
+{
+  runFolder: string;
+  createdAt: string;
+  judgeModel: string;                        // "haiku"
+  status: "ok" | "errored";
+  error?: string;
+  scores: {                                  // present when status = "ok"
+    accuracy: number;                        // 0–100 integer, snapped to 0/25/50/75/100
+    completeness: number;
+    adherence: number;
+    clarity: number;
+  };
+  rationale: string;                         // ≤ 600 chars; present when status = "ok"
+}
+```
+
+---
+
+## SSE event schema
+
+```ts
+type ServerEvent =
+  | { t: "run.started",     col: string, runFolder: string, seq: number }
+  | { t: "run.turn",        col: string, turn: number, seq: number }
+  | { t: "run.partial",     col: string, chunk: string, seq: number }
+  | { t: "run.message",     col: string, role: "assistant"|"user"|"tool", content: unknown, seq: number }
+  | { t: "run.toolUse",     col: string, tool: string, argsSummary: string, seq: number }
+  | { t: "run.toolResult",  col: string, tool: string, resultSummary: string, seq: number }
+  | { t: "run.permissionDenied", col: string, tool: string, path: string, seq: number }
+  | { t: "run.ended",       col: string, status: "completed"|"cancelled"|"truncated"|"errored"|"abandoned", reason?: string, seq: number }
+  | { t: "run.outputs",     col: string, files: Array<{path: string, bytes: number}>, seq: number }
+  | { t: "judge.started",   col: string, seq: number }
+  | { t: "judge.updated",   col: string, payload: JudgeJson, seq: number }
+  | { t: "judge.errored",   col: string, error: string, seq: number }
+  | { t: "server.heartbeat", seq: number };
+```
+
+`seq` is monotonic across server lifetime and survives restart (persisted). Clients reconnect via `Last-Event-ID` and the server replays from disk. Heartbeat every 15 s.
 
 ---
 
 ## Files to create (critical paths)
 
-All are new. Highest implementation risk in:
-
-- `src/server/runner.ts` — subprocess spawn, stream-json parsing, turn-cap enforcement, cancel handling, error surfaces.
-- `src/server/sandbox.ts` — correct variant placement, symlink traversal with gitignore honoring, settings.json emission.
-- `src/server/judge.ts` — judge prompt construction, JSON schema for structured output, integration with per-variant completion events.
-- `src/web/components/TranscriptView.tsx` — rendering live streaming transcripts at readable density.
+- `src/server/runner.ts` — subprocess spawn, stream-json parse, two-cap enforcement, parse-error logging.
+- `src/server/sandbox.ts` — run folder creation, project mirror (per-top-level symlinks with gitignore + hard-exclude), variant placement, settings.json emission.
+- `src/server/judge.ts` — per-variant Haiku invocation with conservative-scoring rubric, ajv validation, retry-once.
+- `src/server/slug.ts` — Haiku slug generation, fallback, hashing, collision handling.
+- `src/server/session.ts` — session state, disk-authoritative state restoration, abandoned-run recovery on boot, Start-new reset.
+- `src/shared/schemas/` — single source of truth for types + validators.
+- `src/web/components/TranscriptView.tsx` — streaming transcript at readable density.
 
 ---
 
 ## Verification
 
-1. `npm install && npm run build` completes cleanly. Type-check clean.
+1. `npm install && npm run build` — clean; type-check clean.
 2. `npm link` exposes `mdredd` globally.
-3. In a test directory containing some `.ts` source files and a `CLAUDE.md`: run `mdredd`. Browser opens to the UI on a dynamic port.
-4. Paste two CLAUDE.md variants (A: "be extremely concise"; B: "be thorough and explain reasoning"), same prompt in both columns ("describe the structure of this project"), click Run on both columns.
-5. Confirm: both subprocesses start within seconds; transcripts stream live side-by-side; turn counters increment.
-6. After both complete, judge auto-fires; rubric table + winner + rationale appear.
-7. `git status` in the test dir shows **no modifications** (write policy held).
-8. Cancel test: start a run, hit Stop mid-stream. Subprocess dies, column shows "Cancelled at turn N", source untouched.
-9. Per-column re-run: edit variant 2's text, click Run on column 2 only. Column 1's transcript remains untouched, judge re-fires with new column-2 result + cached column-1 result.
-10. Inspect `./agents/mdredd/evals/<eval-id>/`: verify `config.json`, `variants/`, `runs/`, `judge.json` structure.
-11. Skill variant test: pick a skill file as the variant; confirm it lands at `.claude/skills/<name>/SKILL.md` in the sandbox and the agent actually picks it up at runtime.
-12. Agent variant test: same, but for `.claude/agents/<name>.md`.
-13. Write-redirect test: craft a variant that instructs "write a summary to notes.md"; confirm the file appears under `runs/<variant>/sandbox/scratch/notes.md`, never in the user's project.
-14. Turn cap test: lower the cap to 3 in a dev build; run a prompt that requires more than 3 turns (e.g. "grep the codebase, summarize, then propose a refactor"); confirm the subprocess is terminated after the 3rd turn and the run is marked "truncated" with a UI badge.
-15. Run on both macOS and Linux; confirm parity. (WSL: print URL if `open` fails, defer.)
+3. **Preflight negatives**: missing / unauthenticated claude → actionable UI error before any column renders.
+4. **Happy read-only**: in a test dir with `.git/` and `.ts` sources, paste two CLAUDE.md variants (A: "be concise"; B: "be thorough"), different prompts, Run both. Transcripts stream live; turn counts increment.
+5. **git status stays clean**: after step 4, `git status` in cwd shows only `agents/mdredd/` (ignored via auto-written `.gitignore`).
+6. **Read-only safety**: prompt variant with "edit README.md to add a line" → `run.permissionDenied` events surface in the transcript; user's real README.md is unmodified; `<run>/outputs/` is empty.
+7. **Write-mode happy path**: switch to Write; prompt "write a summary to summary.md" → `summary.md` lands in `<run>/outputs/`; user's real project untouched.
+8. **Write-mode deny bites**: Write-mode prompt "write to project root / README.md" → `run.permissionDenied` surfaces; no file created outside `<run>/outputs/`.
+9. **Per-variant judge (Haiku)**: after any column completes, a Haiku judge fires for that column only; `judge.json` appears in its run folder with `judgeModel: "haiku"` and 4 scores in {0,25,50,75,100}; other columns' scorecards unaffected.
+10. **Judge conservatism**: prompt where ground truth is unverifiable → `scores.accuracy` ≤ 50 with the uncertainty called out in `rationale`.
+11. **Cancel**: Stop mid-stream → subprocess dies in ≤2 s; status = `cancelled`; no judge fires.
+12. **Rerun**: edit column 2's variant, Run → new run folder appears with new timestamp; column 2 shows the latest; column 1's existing run remains.
+13. **Editing lock**: while any column is running, all variant/prompt/model/mode/judge fields and `+` are disabled; idle columns' Run is disabled. After every column reaches a terminal state, the UI unlocks.
+14. **State restoration**: stop the server mid-eval, start it again; UI reloads with the same variant text, prompts, transcripts, outputs, and judge scores for every run that completed; any in-flight column reloads as `abandoned`.
+15. **Start new**: click Start new → confirmation dialog → after confirm, every run folder and `session.json` are removed; `.gitignore` and `.lock` remain; UI returns to two blank columns.
+16. **Skill variant**: variant lands at `<run>/project/.claude/skills/<name>/SKILL.md`; subprocess picks it up at runtime.
+17. **Agent variant**: same for `.claude/agents/<name>.md`.
+18. **Turn cap**: dev-build cap = 3; prompt requires >3 turns → `truncated` with `truncationReason: "turns"`; judge still fires.
+19. **Wall-clock cap**: dev-build cap = 10 s; long prompt → `truncationReason: "wallclock"`.
+20. **Parse resilience**: fake-claude harness (V28) emits a malformed line → `parse-errors.log` has it; runner continues.
+21. **Parallel**: Run all 3 columns at once; all 3 subprocesses start within a few seconds; transcripts stream concurrently.
+22. **Column cap**: UI `+` hidden at 3; server POST for a 4th column → 400.
+23. **Tab close mid-run**: close tab → run continues; reopen → UI reconnects via `Last-Event-ID` and resumes streaming.
+24. **Duplicate folder name**: contrived collision on timestamp + slug + hash → `-1` suffix applied cleanly.
+25. **Already running**: server POST /run on a streaming column → 409.
+26. **Empty prompt / whitespace variant**: client rejects; server fallback → 400.
+27. **cwd guard**: run from `$HOME` or inside `agents/mdredd/` → refused with clear error.
+28. **Security**: `curl` without session token → 401; with wrong `Origin` → 403; server never binds `0.0.0.0`.
+29. **Judge schema failure**: inject a judge response missing a field → retry once; still invalid → `judge.status = "errored"`, column's run results intact.
+30. **Fake-claude harness**: test binary emits valid stream-json, invalid JSON, partial chunks, stderr auth errors, long-running output, non-zero exits. Runner handles all without crashing. Primary test vehicle during dev.
+31. **Haiku slug offline fallback**: simulate Haiku failure → slug base = `variant`; run proceeds.
+32. **Recursion guard**: cwd contains `agents/mdredd/` with prior runs → mirror skips it cleanly; no symlink cycle.
+33. **macOS + Linux parity**: run both; symlink semantics match. (WSL: print URL if `open` fails, defer.)
 
 ---
 
 ## Deferred to v2
 
-- Wall-clock timeout and loop-pattern "stuck" detection.
-- Rubric customization (today: fixed 4 criteria; later: library + user-defined).
-- Prompt library / prompt suites / multi-turn conversation scripts.
-- History UI (browsable past evals from within the app).
-- Parallel-run concurrency ceiling (today: unlimited).
-- Auto-load most-recent eval on launch / "Open eval" file picker.
-- "Copy prompt to all columns" helper (per-column prompts can drift silently today).
-- Hard enforcement of write policy beyond claude's permission rules (e.g. tool-call interception).
+- Wall-clock extension / "stuck" pattern detection.
+- Expert-mode Bash (and Task) toggle per eval with UI safety warning.
+- Rubric customization (library + user-defined).
+- Prompt-lock toggle (copy a master column's prompt to the others).
+- Prompt library / suites / multi-turn conversation scripts.
+- History UI (browsable past runs within the app beyond the current session's columns).
+- Sandbox cleanup (`mdredd gc`).
+- Selection-time variant snapshotting.
 - Gemini CLI / Codex support; WSL first-class support.
+
+---
+
+## Open questions
+
+All v1 decisions are locked.
