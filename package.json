@@ -1,0 +1,48 @@
+{
+  "name": "mdredd",
+  "version": "0.1.0",
+  "description": "A/B test your Claude Code instruction files.",
+  "type": "module",
+  "bin": {
+    "mdredd": "./bin/mdredd.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run build:web && npm run build:server",
+    "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "build:web": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev:server": "tsx watch src/server/index.ts",
+    "dev:web": "vite",
+    "start": "node dist/server/index.js",
+    "test:runner": "tsx test/runner.smoke.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "get-port": "^7.1.0",
+    "ignore": "^7.0.3",
+    "json5": "^2.2.3",
+    "open": "^10.1.0",
+    "proper-lockfile": "^4.1.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsc-alias": "^1.8.16",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "license": "MIT"
+}
