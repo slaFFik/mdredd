@@ -1,0 +1,330 @@
+import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { Runner } from './runner.js';
+import { buildSandbox } from './sandbox.js';
+import { deriveSlug, listRunFolderNames } from './slug.js';
+import { runJudge } from './judge.js';
+import { SessionStore } from './session.js';
+import { log } from './log.js';
+import { readFile } from 'node:fs/promises';
+import { atomicWriteJson, readJsonIfExists } from './fsUtil.js';
+import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
+import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
+import type { Mode, RunStatus } from '@shared/schemas/types.js';
+import type { ColumnConfig } from '@shared/schemas/session.js';
+
+const SEQ_FILE = '.seq';
+const RING_BUFFER_LIMIT = 2_000;
+
+export interface RunManagerOptions {
+  claudeBin: string;
+  cwd: string;
+  storageRoot: string;
+  session: SessionStore;
+}
+
+export interface SseSubscriber {
+  onEvent(event: ServerSseEvent): void;
+  onClose(): void;
+  lastEventId: number;
+}
+
+export class RunManager extends EventEmitter {
+  private readonly opts: RunManagerOptions;
+  private readonly active = new Map<string, Runner>(); // columnId → runner
+  private readonly ring: ServerSseEvent[] = [];
+  private readonly subscribers = new Set<SseSubscriber>();
+  private seq = 0;
+
+  constructor(opts: RunManagerOptions) {
+    super();
+    this.opts = opts;
+  }
+
+  async init(): Promise<void> {
+    const persisted = await readJsonIfExists<{ seq: number }>(join(this.opts.storageRoot, SEQ_FILE));
+    this.seq = persisted?.seq ?? 0;
+  }
+
+  hasActive(): boolean {
+    return this.active.size > 0;
+  }
+
+  getActiveStatus(columnId: string): RunStatus | 'idle' {
+    const r = this.active.get(columnId);
+    if (!r) return 'idle';
+    return 'streaming';
+  }
+
+  subscribe(sub: SseSubscriber): () => void {
+    this.subscribers.add(sub);
+    // Replay any events with seq > sub.lastEventId that are still in the ring buffer.
+    if (sub.lastEventId > 0) {
+      for (const e of this.ring) {
+        if (e.seq > sub.lastEventId) sub.onEvent(e);
+      }
+    }
+    return () => {
+      this.subscribers.delete(sub);
+      sub.onClose();
+    };
+  }
+
+  private emitSse(event: Omit<ServerSseEvent, 'seq'>): ServerSseEvent {
+    this.seq += 1;
+    const full = { ...event, seq: this.seq } as ServerSseEvent;
+    this.ring.push(full);
+    if (this.ring.length > RING_BUFFER_LIMIT) this.ring.splice(0, this.ring.length - RING_BUFFER_LIMIT);
+    for (const sub of this.subscribers) {
+      try {
+        sub.onEvent(full);
+      } catch (err) {
+        log.warn('runManager.sub-emit-error', { error: (err as Error).message });
+      }
+    }
+    // Persist seq lazily every 25 events to reduce FS churn.
+    if (this.seq % 25 === 0) {
+      atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: this.seq }).catch((err) => {
+        log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
+      });
+    }
+    return full;
+  }
+
+  emitHeartbeat(): void {
+    this.emitSse({ t: 'server.heartbeat' } as Omit<ServerSseEvent, 'seq'>);
+  }
+
+  async startColumn(columnId: string): Promise<RunConfig> {
+    if (this.active.has(columnId)) {
+      throw new RunManagerError('column-already-running', `column ${columnId} is already running`, 409);
+    }
+    const sessionSnap = this.opts.session.snapshot;
+    const col = sessionSnap.columns.find((c) => c.id === columnId);
+    if (!col) throw new RunManagerError('column-not-found', `unknown column ${columnId}`, 404);
+
+    validateColumnReady(col);
+
+    if (sessionSnap.columns.some((c) => c.currentRunFolder && this.active.has(c.id))) {
+      // The plan locks editing while any column is non-terminal; this guard covers the API surface.
+    }
+
+    const existingFolders = await listRunFolderNames(this.opts.storageRoot);
+    const slug = await deriveSlug(
+      {
+        explicitName: col.variantName,
+        variantContent: col.variantContent,
+        claudeBin: this.opts.claudeBin,
+      },
+      existingFolders,
+    );
+
+    const sandbox = await buildSandbox({
+      cwd: this.opts.cwd,
+      storageRoot: this.opts.storageRoot,
+      runFolder: slug.folderName,
+      variantType: col.variantType,
+      skillOrAgentName: col.skillOrAgentName,
+      variantContent: col.variantContent,
+      mode: sessionSnap.mode,
+    });
+
+    const initialConfig: RunConfig = {
+      runFolder: slug.folderName,
+      columnId,
+      variantName: col.variantName || slug.slugBase,
+      variantType: col.variantType,
+      skillOrAgentName: col.skillOrAgentName,
+      variantContentSha256: sha256(col.variantContent),
+      promptSha256: sha256(col.prompt),
+      prompt: col.prompt,
+      model: col.model,
+      mode: sessionSnap.mode,
+      status: 'preparing',
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      turnCount: 0,
+      wallClockMs: 0,
+      truncationReason: null,
+      exitCode: null,
+      signal: null,
+      errorMessage: null,
+      toolAllowlist: [],
+      caps: { turns: 50, wallClockMs: 5 * 60 * 1000 },
+    };
+
+    const runner = new Runner({
+      claudeBin: this.opts.claudeBin,
+      projectDir: sandbox.projectDir,
+      runDir: sandbox.runDir,
+      outputsDir: sandbox.outputsDir,
+      prompt: col.prompt,
+      model: col.model,
+      mode: sessionSnap.mode as Mode,
+      initialConfig,
+    });
+
+    this.active.set(columnId, runner);
+    await this.opts.session.setColumnField(columnId, 'currentRunFolder', slug.folderName);
+
+    this.emitSse({
+      t: 'run.started',
+      col: columnId,
+      runFolder: slug.folderName,
+    } as Omit<ServerSseEvent, 'seq'>);
+    this.emitSse({
+      t: 'column.statusChanged',
+      col: columnId,
+      status: 'preparing',
+      runFolder: slug.folderName,
+    } as Omit<ServerSseEvent, 'seq'>);
+
+    runner.on('normalized', (e: NormalizedEvent) => {
+      this.normalizedToSse(columnId, e);
+    });
+    runner.on('statusChanged', (status) => {
+      this.emitSse({
+        t: 'column.statusChanged',
+        col: columnId,
+        status,
+        runFolder: slug.folderName,
+      } as Omit<ServerSseEvent, 'seq'>);
+    });
+    runner.on('outputs', (files) => {
+      this.emitSse({
+        t: 'run.outputs',
+        col: columnId,
+        files,
+      } as Omit<ServerSseEvent, 'seq'>);
+    });
+    runner.on('ended', (cfg) => {
+      this.active.delete(columnId);
+      this.emitSse({
+        t: 'run.ended',
+        col: columnId,
+        status: cfg.status,
+        reason: cfg.truncationReason ?? cfg.errorMessage ?? undefined,
+      } as Omit<ServerSseEvent, 'seq'>);
+      if (sessionSnap.judgeEnabled && (cfg.status === 'completed' || cfg.status === 'truncated')) {
+        void this.fireJudge(columnId, cfg, slug.folderName);
+      }
+    });
+
+    await runner.start();
+    return runner['input'].initialConfig;
+  }
+
+  async stopColumn(columnId: string): Promise<void> {
+    const runner = this.active.get(columnId);
+    if (!runner) throw new RunManagerError('column-not-running', `column ${columnId} is not running`, 409);
+    await runner.stop();
+  }
+
+  private normalizedToSse(columnId: string, e: NormalizedEvent): void {
+    switch (e.t) {
+      case 'turn':
+        this.emitSse({ t: 'run.turn', col: columnId, turn: e.turn } as Omit<ServerSseEvent, 'seq'>);
+        return;
+      case 'partial':
+        this.emitSse({ t: 'run.partial', col: columnId, chunk: e.chunk, kind: e.kind } as Omit<ServerSseEvent, 'seq'>);
+        return;
+      case 'message':
+        this.emitSse({ t: 'run.message', col: columnId, role: e.role, content: e.content } as Omit<ServerSseEvent, 'seq'>);
+        return;
+      case 'toolUse':
+        this.emitSse({ t: 'run.toolUse', col: columnId, tool: e.tool, argsSummary: e.argsSummary } as Omit<ServerSseEvent, 'seq'>);
+        return;
+      case 'toolResult':
+        this.emitSse({
+          t: 'run.toolResult',
+          col: columnId,
+          tool: e.tool,
+          resultSummary: e.resultSummary,
+          isError: e.isError,
+        } as Omit<ServerSseEvent, 'seq'>);
+        return;
+      case 'permissionDenied':
+        this.emitSse({
+          t: 'run.permissionDenied',
+          col: columnId,
+          tool: e.tool,
+          path: e.path,
+        } as Omit<ServerSseEvent, 'seq'>);
+        return;
+    }
+  }
+
+  private async fireJudge(columnId: string, cfg: RunConfig, runFolder: string): Promise<void> {
+    this.emitSse({ t: 'judge.started', col: columnId } as Omit<ServerSseEvent, 'seq'>);
+    const runDir = join(this.opts.storageRoot, runFolder);
+    const transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
+    if (!transcript) {
+      this.emitSse({
+        t: 'judge.errored',
+        col: columnId,
+        error: 'transcript.json missing',
+      } as Omit<ServerSseEvent, 'seq'>);
+      return;
+    }
+    const variantPath = join(runDir, 'variant.md');
+    const variantContent = await readFile(variantPath, 'utf8').catch(() => '');
+    const bundle = await this.opts.session.readRunBundle(runFolder);
+    const outputs = bundle?.outputs ?? [];
+    try {
+      const judgeFile = await runJudge({
+        claudeBin: this.opts.claudeBin,
+        runDir,
+        runConfig: cfg,
+        transcript,
+        variantContent,
+        outputs,
+      });
+      if (judgeFile.status === 'ok') {
+        this.emitSse({
+          t: 'judge.updated',
+          col: columnId,
+          payload: judgeFile,
+        } as Omit<ServerSseEvent, 'seq'>);
+      } else {
+        this.emitSse({
+          t: 'judge.errored',
+          col: columnId,
+          error: judgeFile.error ?? 'unknown error',
+        } as Omit<ServerSseEvent, 'seq'>);
+      }
+    } catch (err) {
+      this.emitSse({
+        t: 'judge.errored',
+        col: columnId,
+        error: (err as Error).message,
+      } as Omit<ServerSseEvent, 'seq'>);
+    }
+  }
+}
+
+export class RunManagerError extends Error {
+  code: string;
+  httpStatus: number;
+  constructor(code: string, message: string, httpStatus = 400) {
+    super(message);
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+function validateColumnReady(col: ColumnConfig): void {
+  if (!col.prompt.trim()) {
+    throw new RunManagerError('prompt-empty', 'Prompt is empty', 400);
+  }
+  if (!col.variantContent.trim()) {
+    throw new RunManagerError('variant-empty', 'Variant content is empty', 400);
+  }
+  if (col.variantType !== 'CLAUDE.md' && !col.skillOrAgentName) {
+    throw new RunManagerError('skill-agent-name-missing', `${col.variantType} variants need a name`, 400);
+  }
+}
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}

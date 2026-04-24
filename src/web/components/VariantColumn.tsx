@@ -1,0 +1,350 @@
+import { Fragment, useEffect, useState } from 'react';
+import type { ColumnConfig } from '@shared/schemas/session.js';
+import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
+import type { JudgeFile } from '@shared/schemas/judge.js';
+import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
+import type { LocalVariant, LocalVariantsResponse } from '@shared/schemas/localVariants.js';
+import type { ColumnLiveState } from '../App.js';
+import { VariantEditor } from './VariantEditor.js';
+import { PromptField } from './PromptField.js';
+import {
+  TranscriptView,
+  formatCost,
+  formatElapsed,
+  formatTokenCount,
+  modelWorkElapsedMs,
+  pluralizeToolCalls,
+  pluralizeTurns,
+} from './TranscriptView.js';
+import type { TokenUsage } from '@shared/schemas/run.js';
+import { JudgeCard } from './JudgeCard.js';
+
+const MODELS = [
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'haiku', label: 'Haiku' },
+];
+
+const VARIANT_TYPES = [
+  { id: 'CLAUDE.md', label: 'CLAUDE.md' },
+  { id: 'skill', label: 'Skill' },
+  { id: 'agent', label: 'Agent' },
+];
+
+const PICKER_NONE = '__none__';
+const PICKER_NEW = '__new__';
+
+export function VariantColumn(props: {
+  column: ColumnConfig;
+  status: ColumnStatus;
+  live: ColumnLiveState;
+  runBundle: {
+    config: RunConfig;
+    transcript: TranscriptFile | null;
+    judge: JudgeFile | null;
+    outputs: OutputFile[];
+  } | null;
+  canRemove: boolean;
+  mode: Mode;
+  localVariants: LocalVariantsResponse;
+  onReloadLocalVariants: () => Promise<void>;
+  onPatchColumn: (columnId: string, patch: Partial<ColumnConfig>) => Promise<void>;
+  onRun: (columnId: string) => Promise<void>;
+  onStop: (columnId: string) => Promise<void>;
+  onRemove: (columnId: string) => void | Promise<void>;
+}): JSX.Element {
+  const { column, status, live, runBundle, canRemove, mode, localVariants } = props;
+
+  // A column only locks its OWN fields while it is streaming. Other columns stay
+  // fully editable — runs are independent and write to separate folders.
+  const isStreaming = status === 'streaming' || status === 'preparing';
+  const canRun = !isStreaming && column.prompt.trim() && column.variantContent.trim();
+  const canStop = isStreaming;
+
+  const progressParts = buildProgressParts(status, live, runBundle);
+
+  // Picker state: true when the user is actively creating a new skill/agent.
+  const localList = pickLocalList(column.variantType, localVariants);
+  const nameMatches = column.skillOrAgentName
+    ? localList.some((v) => v.name === column.skillOrAgentName)
+    : false;
+  const [explicitCreate, setExplicitCreate] = useState(false);
+
+  useEffect(() => {
+    if (column.variantType !== 'skill' && column.variantType !== 'agent') {
+      if (explicitCreate) setExplicitCreate(false);
+    }
+  }, [column.variantType, explicitCreate]);
+
+  const creatingNew =
+    explicitCreate || (Boolean(column.skillOrAgentName) && !nameMatches);
+
+  const onPickFromDropdown = async (value: string): Promise<void> => {
+    if (value === PICKER_NONE) {
+      setExplicitCreate(false);
+      await props.onPatchColumn(column.id, { skillOrAgentName: null, variantContent: '' });
+      return;
+    }
+    if (value === PICKER_NEW) {
+      setExplicitCreate(true);
+      await props.onPatchColumn(column.id, { skillOrAgentName: '', variantContent: '' });
+      return;
+    }
+    const picked = localList.find((v) => v.name === value);
+    if (!picked) return;
+    setExplicitCreate(false);
+    await props.onPatchColumn(column.id, {
+      skillOrAgentName: picked.name,
+      variantContent: picked.content,
+    });
+  };
+
+  const dropdownValue = creatingNew
+    ? PICKER_NEW
+    : nameMatches
+      ? (column.skillOrAgentName as string)
+      : PICKER_NONE;
+
+  return (
+    <div className="column">
+      <div className="column-header">
+        <input
+          type="text"
+          placeholder="Variant name (optional — will be auto-generated)"
+          value={column.variantName}
+          disabled={isStreaming}
+          onChange={(e) => void props.onPatchColumn(column.id, { variantName: e.target.value })}
+        />
+        <select
+          value={column.model}
+          disabled={isStreaming}
+          onChange={(e) => void props.onPatchColumn(column.id, { model: e.target.value })}
+          title="Model"
+        >
+          {MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <div className="meta-row">
+          <select
+            value={column.variantType}
+            disabled={isStreaming}
+            onChange={(e) => {
+              const next = e.target.value as ColumnConfig['variantType'];
+              setExplicitCreate(false);
+              void props.onPatchColumn(column.id, {
+                variantType: next,
+                skillOrAgentName: next === 'CLAUDE.md' ? null : column.skillOrAgentName,
+              });
+            }}
+            title="Variant type"
+          >
+            {VARIANT_TYPES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          {(column.variantType === 'skill' || column.variantType === 'agent') && (
+            <>
+              <select
+                value={dropdownValue}
+                disabled={isStreaming}
+                onChange={(e) => void onPickFromDropdown(e.target.value)}
+                title={`Pick a local ${column.variantType} or create new`}
+              >
+                <option value={PICKER_NONE}>
+                  {localList.length === 0 ? `(no local ${column.variantType}s)` : '(pick one…)'}
+                </option>
+                {localList.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+                <option value={PICKER_NEW}>+ Create new {column.variantType}</option>
+              </select>
+              {creatingNew && (
+                <input
+                  type="text"
+                  placeholder={`new ${column.variantType} name (letters, numbers, _-)`}
+                  value={column.skillOrAgentName ?? ''}
+                  disabled={isStreaming}
+                  onChange={(e) =>
+                    void props.onPatchColumn(column.id, {
+                      skillOrAgentName: e.target.value || null,
+                    })
+                  }
+                />
+              )}
+              <button
+                className="remove-column"
+                onClick={() => void props.onReloadLocalVariants()}
+                title="Rescan .claude/ for local skills/agents"
+                style={{ fontSize: 11 }}
+              >
+                ↻
+              </button>
+            </>
+          )}
+          <span className={`badge ${status}`}>{status}</span>
+          <span style={{ flex: 1 }} />
+          {canRemove && !isStreaming && (
+            <button
+              className="remove-column"
+              onClick={() => void props.onRemove(column.id)}
+              title="Remove column"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+
+      <VariantEditor
+        value={column.variantContent}
+        disabled={isStreaming}
+        onChange={(v) => void props.onPatchColumn(column.id, { variantContent: v })}
+      />
+
+      <PromptField
+        value={column.prompt}
+        disabled={isStreaming}
+        onChange={(v) => void props.onPatchColumn(column.id, { prompt: v })}
+      />
+
+      <div className="run-bar">
+        {canStop ? (
+          <button className="stop" onClick={() => void props.onStop(column.id)}>
+            Stop
+          </button>
+        ) : (
+          <button
+            onClick={() => void props.onRun(column.id)}
+            disabled={!canRun}
+            title={
+              !column.prompt.trim()
+                ? 'Fill in a prompt'
+                : !column.variantContent.trim()
+                  ? 'Paste variant content'
+                  : 'Run'
+            }
+          >
+            Run
+          </button>
+        )}
+        <span className="status">
+          {progressParts.map((p, i) => (
+            <Fragment key={i}>
+              {i > 0 && <span className="status-sep"> · </span>}
+              {p.title ? (
+                <span className="status-part" title={p.title}>
+                  {p.text}
+                </span>
+              ) : (
+                <span className="status-part">{p.text}</span>
+              )}
+            </Fragment>
+          ))}
+        </span>
+      </div>
+
+      <TranscriptView
+        live={live}
+        runBundle={runBundle}
+        isStreaming={isStreaming}
+      />
+
+      {mode === 'write' && runBundle && runBundle.outputs.length > 0 && (
+        <div className="outputs">
+          <strong>outputs/</strong>
+          <ul style={{ margin: '4px 0 0 0', padding: 0, listStyle: 'none' }}>
+            {runBundle.outputs.map((o) => (
+              <li key={o.path} style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+                {o.path} <span style={{ color: 'var(--fg-dim)' }}>({o.bytes} B)</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {runBundle?.judge && <JudgeCard judge={runBundle.judge} />}
+    </div>
+  );
+}
+
+function pickLocalList(
+  variantType: ColumnConfig['variantType'],
+  local: LocalVariantsResponse,
+): LocalVariant[] {
+  if (variantType === 'skill') return local.skills;
+  if (variantType === 'agent') return local.agents;
+  return [];
+}
+
+interface StatusPart {
+  text: string;
+  title?: string;
+}
+
+const TIME_TITLE =
+  'Time the model worked to produce the output shown above. Matches the elapsed time on the last turn marker in the transcript.';
+
+function buildProgressParts(
+  status: ColumnStatus,
+  live: ColumnLiveState,
+  runBundle: {
+    config: RunConfig;
+    transcript: TranscriptFile | null;
+  } | null,
+): StatusPart[] {
+  if (status === 'streaming' || status === 'preparing') {
+    const elapsedMs = live.startedAt ? Date.now() - live.startedAt : 0;
+    const toolCalls = live.events.filter((e) => e.kind === 'tool-use').length;
+    const parts: StatusPart[] = [
+      { text: `turn ${live.turnCount}` },
+      { text: formatElapsed(elapsedMs), title: TIME_TITLE },
+      { text: `${toolCalls}T`, title: pluralizeToolCalls(toolCalls) },
+    ];
+    if (live.lastTool) parts.push({ text: `last tool: ${live.lastTool}` });
+    return parts;
+  }
+  if (runBundle) {
+    const cfg = runBundle.config;
+    const workElapsed = modelWorkElapsedMs(runBundle.transcript);
+    const toolCalls =
+      runBundle.transcript?.events.filter((e) => e.t === 'toolUse').length ?? 0;
+    const parts: StatusPart[] = [
+      { text: pluralizeTurns(cfg.turnCount) },
+      { text: formatElapsed(workElapsed ?? cfg.wallClockMs), title: TIME_TITLE },
+      { text: `${toolCalls}T`, title: pluralizeToolCalls(toolCalls) },
+    ];
+    const usage = cfg.tokenUsage ?? null;
+    if (usage) {
+      const input = totalInputTokens(usage);
+      const output = usage.outputTokens;
+      if (input > 0 || output > 0) {
+        parts.push({
+          text: `${formatTokenCount(input)} in / ${formatTokenCount(output)} out`,
+          title: `Input = new + cache-read + cache-creation (new=${usage.inputTokens}, cache-read=${usage.cacheReadTokens}, cache-creation=${usage.cacheCreationTokens}). Output = generated tokens. Numbers from claude CLI.`,
+        });
+      }
+    }
+    if (typeof cfg.costUsd === 'number' && cfg.costUsd > 0) {
+      parts.push({
+        text: formatCost(cfg.costUsd),
+        title: 'USD cost as reported by the claude CLI.',
+      });
+    }
+    if (cfg.truncationReason) {
+      parts.push({ text: `truncated (${cfg.truncationReason})` });
+    }
+    return parts;
+  }
+  return [];
+}
+
+function totalInputTokens(u: TokenUsage): number {
+  return u.inputTokens + u.cacheReadTokens + u.cacheCreationTokens;
+}
