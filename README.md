@@ -1,4 +1,4 @@
-# mdredd
+# MDredd
 
 > A/B test your Claude Code instruction files.
 
@@ -10,9 +10,9 @@ You edit `CLAUDE.md` hoping Claude will follow instructions better. You run a pr
 
 Without a structured way to compare variants, every instruction tweak is a guess.
 
-## What mdredd does
+## What MDredd does
 
-mdredd runs two or three versions of the same instruction file in parallel — each with its own prompt — and shows you the full results side by side. An optional judge model scores each variant independently on a rubric (Accuracy, Completeness, Adherence, Clarity) so you can compare them at a glance.
+MDredd runs two or three versions of the same instruction file in parallel — each with its own prompt — and shows you the full results side by side. An optional judge model scores each variant independently on a rubric (Accuracy, Completeness, Adherence, Clarity) so you can compare them at a glance.
 
 ## What you can do with it
 
@@ -36,7 +36,7 @@ mdredd runs two or three versions of the same instruction file in parallel — e
 - Node.js
 - macOS or Linux
 
-You don't need an API key — mdredd piggybacks on your existing Claude Code auth.
+You don't need an API key — MDredd piggybacks on your existing Claude Code auth.
 
 ## Status
 
