@@ -1,4 +1,4 @@
-export const STORAGE_ROOT_REL = 'agents/mdredd';
+export const STORAGE_DIR_NAME = '.mdredd';
 export const LOCK_FILE = '.lock';
 export const SESSION_FILE = 'session.json';
 export const GITIGNORE_FILE = '.gitignore';

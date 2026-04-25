@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
-import { PROJECT_MARKERS, STORAGE_ROOT_REL } from '@shared/constants.js';
+import { PROJECT_MARKERS, STORAGE_DIR_NAME } from '@shared/constants.js';
 import { readdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { log } from './log.js';
 
@@ -33,8 +33,8 @@ export class PreflightError extends Error {
 
 export async function runPreflight(input: PreflightInput): Promise<PreflightResult> {
   await checkClaudeCli(input.claudeBin);
-  await cwdGuard(input.cwd, input.force ?? false);
-  const storageRoot = resolve(input.cwd, STORAGE_ROOT_REL);
+  const storageRoot = join(homedir(), STORAGE_DIR_NAME);
+  await cwdGuard(input.cwd, input.force ?? false, storageRoot);
   const lockFilePath = join(storageRoot, '.lock');
   await ensureDir(storageRoot);
   await ensureAutoGitignore(storageRoot);
@@ -85,7 +85,7 @@ async function checkClaudeCli(bin: string): Promise<void> {
   }
 }
 
-async function cwdGuard(cwd: string, force: boolean): Promise<void> {
+async function cwdGuard(cwd: string, force: boolean, storageRoot: string): Promise<void> {
   const home = homedir();
   if (cwd === home) {
     throw new PreflightError(
@@ -102,21 +102,13 @@ async function cwdGuard(cwd: string, force: boolean): Promise<void> {
     );
   }
 
-  // Refuse if cwd is inside an agents/mdredd directory (walk upward).
-  let cursor = cwd;
-  let guard = 0;
-  while (cursor && cursor !== '/' && guard++ < 50) {
-    const base = cursor.split('/').slice(-2).join('/');
-    if (base === STORAGE_ROOT_REL) {
-      throw new PreflightError(
-        'cwd-inside-storage',
-        `Refusing to run mdredd from inside an agents/mdredd directory (at ${cursor}).`,
-        'cd out of the storage directory and run mdredd from the project root.',
-      );
-    }
-    const parent = cursor.slice(0, cursor.lastIndexOf('/')) || '/';
-    if (parent === cursor) break;
-    cursor = parent;
+  // Refuse if cwd is at or under the global mdredd storage directory.
+  if (cwd === storageRoot || cwd.startsWith(storageRoot + '/')) {
+    throw new PreflightError(
+      'cwd-inside-storage',
+      `Refusing to run mdredd from inside the storage directory (${storageRoot}).`,
+      'cd into the project root and try again.',
+    );
   }
 
   if (force) return;

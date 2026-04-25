@@ -2,7 +2,7 @@
 
 ## Context
 
-Build a local CLI + browser UI for comparing variants of Claude Code instruction files (`CLAUDE.md`, skills, agents). The user runs `mdredd` in any working directory; a Node server picks a free port, launches a React UI in the default browser, and lets them iterate on instruction-file variants side-by-side. Each column spawns its own `claude -p` subprocess against a per-column prompt and streams the transcript live. A per-variant judge scores each completed run on a rubric. No API-key management — the tool piggybacks on the user's existing `claude` auth. Persistence is flat JSON on disk under `<cwd>/agents/mdredd/`. v1 is Claude-only; macOS and Linux.
+Build a local CLI + browser UI for comparing variants of Claude Code instruction files (`CLAUDE.md`, skills, agents). The user runs `mdredd` in any working directory; a Node server picks a free port, launches a React UI in the default browser, and lets them iterate on instruction-file variants side-by-side. Each column spawns its own `claude -p` subprocess against a per-column prompt and streams the transcript live. A per-variant judge scores each completed run on a rubric. No API-key management — the tool piggybacks on the user's existing `claude` auth. Persistence is flat JSON on disk under `~/.mdredd/`. v1 is Claude-only; macOS and Linux.
 
 **Safety model.** Read-only mode is the default and uses a claude CLI tool allowlist (`Read,Glob,Grep,WebSearch,WebFetch`) that simply doesn't include any write/execute tool — so nothing can mutate the user's project, full stop. Write mode additionally includes `Write,Edit` constrained by `.claude/settings.json` permission rules to a per-run `outputs/` directory. `Bash`, `Task`, `NotebookEdit`, and MCP are absent from both allowlists in v1. The "your source files stay untouched" promise is delivered by the allowlist, not by polite instructions to the model.
 
@@ -24,9 +24,9 @@ The repo currently contains only README.md, LICENSE, and docs/PLAN.md. Everythin
 - **Prompt**: per-column prompt field, independent per variant.
 - **Model**: default-model dropdown with per-column override.
 - **Judge (per-variant)**: toggle per eval (default on). Fires once per `completed` or `truncated` run against that run's transcript. Rubric = **Accuracy, Completeness, Adherence, Clarity**, each scored 0–100 on a 5-band anchor scale (0/25/50/75/100). No "winner" — each variant gets an independent scorecard; the human compares. **Judge model = Haiku** (mirrors the pattern in claude's own `code-review` skill: Haiku is cheap, fast, and consistent for rubric-driven scoring). Judgment stored at `<run>/judge.json`.
-- **Storage root**: `<cwd>/agents/mdredd/` (in-project, auto-gitignored).
+- **Storage root**: `~/.mdredd/` (out-of-project; keeps the host project path out of the child's cwd).
 - **History UI**: none; run folders are chronologically sorted on disk. Within a session, re-running a column creates a new run folder rather than overwriting.
-- **State restoration**: on boot, the server reads `session.json` + each referenced run folder and restores the full UI (prompts, variant text, transcripts, outputs, judge scores) from disk. Nothing is lost on server restart or browser refresh. A **Start new** top-bar button (confirmation dialog) wipes every run folder and `session.json` under `agents/mdredd/` (preserves `.gitignore` and `.lock`), returning to a blank slate.
+- **State restoration**: on boot, the server reads `session.json` + each referenced run folder and restores the full UI (prompts, variant text, transcripts, outputs, judge scores) from disk. Nothing is lost on server restart or browser refresh. A **Start new** top-bar button (confirmation dialog) wipes every run folder and `session.json` under `~/.mdredd/` (preserves `.gitignore` and `.lock`), returning to a blank slate.
 - **Editing lock while running**: while any column is in a non-terminal state (`preparing`, `streaming`), all editable surfaces are disabled — variant textareas, prompt fields, model dropdowns, mode toggle, judge toggle, and idle columns' Run buttons. Only active columns' Stop buttons and Start new remain clickable. Unlocks as soon as every column reaches a terminal state.
 - **Safety cap**: defense-in-depth — two independent caps (turns, wall-clock). See § Safety cap.
 - **Cancel**: per-column Stop kills the subprocess (SIGTERM, 2s grace, SIGKILL).
@@ -95,9 +95,9 @@ mdredd/
 1. `claude --version` — fail fast if not installed.
 2. `claude --help` parsed for required flags: `--output-format stream-json`, `--include-partial-messages`, `--tools`, `--allowedTools`, `--strict-mcp-config`, `--setting-sources`, `--model`.
 3. Auth smoke: trivial cap-bounded `claude -p`. On failure, UI shows a pointer to `claude login`.
-4. **cwd guard**: refuse if cwd is `$HOME`, `/`, or inside an `agents/mdredd/` directory (walk upward). Require cwd to contain a project marker (`.git/`, `package.json`, `composer.json`, `Cargo.toml`, `pyproject.toml`) or `--force`.
-5. **Instance lock**: refuse to start a second `mdredd` with the same cwd (`.lock` file at `<cwd>/agents/mdredd/.lock` with pid + port; stale-lock recovery if pid is gone).
-6. **Auto-gitignore**: if `<cwd>/agents/mdredd/.gitignore` doesn't exist, write `*\n!.gitignore\n` so the user's `git status` stays clean.
+4. **cwd guard**: refuse if cwd is `$HOME`, `/`, or at-or-under `~/.mdredd/`. Require cwd to contain a project marker (`.git/`, `package.json`, `composer.json`, `Cargo.toml`, `pyproject.toml`) or `--force`.
+5. **Instance lock**: only one `mdredd` per machine (`.lock` file at `~/.mdredd/.lock` with pid + port; stale-lock recovery if pid is gone).
+6. **Auto-gitignore**: if `~/.mdredd/.gitignore` doesn't exist, write `*\n!.gitignore\n`. (No-op outside a git repo, kept as a safety belt.)
 7. **Abandoned-run recovery**: scan existing run folders; any with `status ∈ {"preparing","streaming"}` and no live PID get rewritten to `status: "abandoned"` before the UI boots.
 
 ### Security
@@ -146,11 +146,11 @@ Per-run folder name: `<timestamp-ms>-<slug-base>-<content-hash>`.
 1. User clicks **Run** on column N.
 2. Server validates: prompt non-empty; variant content non-whitespace; column not already running; no column is in a non-terminal state if editing was locked at click time; total columns ≤ 3.
 3. Resolve slug (see § Slug derivation). Block briefly if Haiku is required.
-4. Create run folder `<cwd>/agents/mdredd/<timestamp>-<slug-base>-<hash>/`. Write `config.json` (initial state, prompt hash, variant hash, mode, model, status=`preparing`). Write `variant.md` snapshot.
+4. Create run folder `~/.mdredd/<timestamp>-<slug-base>-<hash>/`. Write `config.json` (initial state, prompt hash, variant hash, mode, model, status=`preparing`). Write `variant.md` snapshot.
 5. Build sandbox inside the run folder:
    - `<run>/project/` — claude's cwd for this run
    - `<run>/outputs/` — write target (created even in read-only mode; stays empty)
-6. Mirror user's cwd into `<run>/project/` with per-top-level-entry symlinks, filtered by the user's `.gitignore` plus a hard exclusion of `agents/mdredd/**` and the variant's own canonical path. Refuse on symlink cycles.
+6. Mirror user's cwd into `<run>/project/` with per-top-level-entry symlinks, filtered by the user's `.gitignore`, plus a defense-in-depth skip of any entry whose realpath contains the storage root, plus the variant's own canonical path. Refuse on symlink cycles.
 7. Place variant at its canonical path inside `<run>/project/`:
    - CLAUDE.md → `<run>/project/CLAUDE.md`
    - Skill → `<run>/project/.claude/skills/<name>/SKILL.md`
@@ -235,7 +235,7 @@ UI: the JudgeCard for each column renders 4 numeric scores (0–100) + short rat
 
 Single scrollable page.
 
-**Top bar**: **Mode: Read-only / Write** (disabled while any column is running), **Judge ON/OFF** (disabled while any column is running), **Start new** (confirm dialog → cancels running columns, then deletes every run folder + `session.json` under `agents/mdredd/`, preserving `.gitignore` and `.lock`).
+**Top bar**: **Mode: Read-only / Write** (disabled while any column is running), **Judge ON/OFF** (disabled while any column is running), **Start new** (confirm dialog → cancels running columns, then deletes every run folder + `session.json` under `~/.mdredd/`, preserving `.gitignore` and `.lock`).
 
 **Column row** (up to 3 columns; `+` button hidden at cap and hidden while any column is running):
 - Header: variant name input (empty triggers Haiku slug), variant source (textarea + upload button), variant-type indicator (CLAUDE.md / skill / agent, inferred or explicit), skill/agent name field when applicable, model dropdown.
@@ -254,8 +254,8 @@ Single scrollable page.
 ## Persistence layout
 
 ```
-<cwd>/agents/mdredd/
-├── .gitignore                              # auto-written: "*" plus "!.gitignore"
+~/.mdredd/
+├── .gitignore                              # auto-written: "*" plus "!.gitignore" (no-op outside a git repo)
 ├── .lock                                   # pid + port of running instance
 ├── session.json                            # column → run mapping, mode, judge toggle, variant name/content/prompt/model for each column
 └── 2026-04-23T15-30-12-345-concise-style-a1b2c3/   # one run
@@ -277,7 +277,7 @@ Single scrollable page.
 
 Atomic writes via `*.tmp` + `rename`. File-level locks via `proper-lockfile` where multiple processes touch the same file.
 
-**Start new**: confirms with the user, cancels all running runs, then removes every entry under `agents/mdredd/` except `.gitignore` and `.lock`. Server rewrites a fresh `session.json` with default column defaults.
+**Start new**: confirms with the user, cancels all running runs, then removes every entry under `~/.mdredd/` except `.gitignore` and `.lock`. Server rewrites a fresh `session.json` with default column defaults.
 
 ---
 
@@ -300,7 +300,7 @@ TS types + ajv validators live under `src/shared/schemas/`. JSON Schemas are gen
     variantContent: string;                  // current draft; restored on reload
     prompt: string;                          // current draft; restored on reload
     model: string;
-    currentRunFolder: string | null;         // relative path under agents/mdredd/
+    currentRunFolder: string | null;         // run folder name under ~/.mdredd/
   }>;
 }
 ```
@@ -403,7 +403,7 @@ type ServerEvent =
 2. `npm link` exposes `mdredd` globally.
 3. **Preflight negatives**: missing / unauthenticated claude → actionable UI error before any column renders.
 4. **Happy read-only**: in a test dir with `.git/` and `.ts` sources, paste two CLAUDE.md variants (A: "be concise"; B: "be thorough"), different prompts, Run both. Transcripts stream live; turn counts increment.
-5. **git status stays clean**: after step 4, `git status` in cwd shows only `agents/mdredd/` (ignored via auto-written `.gitignore`).
+5. **git status stays clean**: after step 4, `git status` in cwd is unchanged — mdredd writes nothing into the user's project.
 6. **Read-only safety**: prompt variant with "edit README.md to add a line" → `run.permissionDenied` events surface in the transcript; user's real README.md is unmodified; `<run>/outputs/` is empty.
 7. **Write-mode happy path**: switch to Write; prompt "write a summary to summary.md" → `summary.md` lands in `<run>/outputs/`; user's real project untouched.
 8. **Write-mode deny bites**: Write-mode prompt "write to project root / README.md" → `run.permissionDenied` surfaces; no file created outside `<run>/outputs/`.
@@ -425,12 +425,12 @@ type ServerEvent =
 24. **Duplicate folder name**: contrived collision on timestamp + slug + hash → `-1` suffix applied cleanly.
 25. **Already running**: server POST /run on a streaming column → 409.
 26. **Empty prompt / whitespace variant**: client rejects; server fallback → 400.
-27. **cwd guard**: run from `$HOME` or inside `agents/mdredd/` → refused with clear error.
+27. **cwd guard**: run from `$HOME` or at-or-under `~/.mdredd/` → refused with clear error.
 28. **Security**: `curl` without session token → 401; with wrong `Origin` → 403; server never binds `0.0.0.0`.
 29. **Judge schema failure**: inject a judge response missing a field → retry once; still invalid → `judge.status = "errored"`, column's run results intact.
 30. **Fake-claude harness**: test binary emits valid stream-json, invalid JSON, partial chunks, stderr auth errors, long-running output, non-zero exits. Runner handles all without crashing. Primary test vehicle during dev.
 31. **Haiku slug offline fallback**: simulate Haiku failure → slug base = `variant`; run proceeds.
-32. **Recursion guard**: cwd contains `agents/mdredd/` with prior runs → mirror skips it cleanly; no symlink cycle.
+32. **Recursion guard**: cwd entry whose realpath contains the storage root → mirror skips it cleanly; no symlink cycle.
 33. **macOS + Linux parity**: run both; symlink semantics match. (WSL: print URL if `open` fails, defer.)
 
 ---

@@ -2,13 +2,12 @@ import { readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promise
 import { join, resolve } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import type { Mode, VariantType } from '@shared/schemas/types.js';
-import { STORAGE_ROOT_REL } from '@shared/constants.js';
 import { atomicWriteJson, ensureDir, pathExists } from './fsUtil.js';
 import { log } from './log.js';
 
 export interface SandboxInput {
   cwd: string;                     // user's project cwd
-  storageRoot: string;             // <cwd>/agents/mdredd
+  storageRoot: string;             // ~/.mdredd in production; tests may pass a cwd-rooted path
   runFolder: string;               // folder name only
   variantType: VariantType;
   skillOrAgentName: string | null; // required for skill/agent, ignored for CLAUDE.md
@@ -36,12 +35,14 @@ export interface SandboxResult {
  *     outputs/           ← write target for write mode; empty in read-only
  *
  * Hard-excluded regardless of gitignore:
- *   - agents/mdredd       (our own storage)
  *   - .git                (keep variant runs away from git state; we plant a fresh
  *                          sandbox .git below so child claude can't walk upward
  *                          and rediscover the host project's .git)
  *   - .claude             (skill/agent variants create a fresh .claude; CLAUDE.md variant
  *                          still skips user .claude to ensure a clean A/B baseline)
+ *   - any entry whose realpath is or contains the storage root (defense-in-depth;
+ *                          in production storage is `~/.mdredd` so this never fires,
+ *                          but tests/legacy layouts may put storage inside cwd)
  *   - the variant's own canonical path (we write it ourselves below)
  */
 export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> {
@@ -69,7 +70,7 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
       skipped.push({ name, reason: 'hard-excluded' });
       continue;
     }
-    if (name === STORAGE_ROOT_REL.split('/')[0] && isStorageRootDescendant(input.cwd, name, input.storageRoot)) {
+    if (isStorageRootDescendant(input.cwd, name, input.storageRoot)) {
       skipped.push({ name, reason: 'storage root' });
       continue;
     }
@@ -182,10 +183,9 @@ export function canonicalVariantRelPath(input: {
  * Claude Code's CLI walks up from cwd looking for `.git/` to determine the project
  * root, which it then uses for two things that leak host context: auto-injected
  * git status/branch/recent-commits, and the per-project auto-memory path
- * (`~/.claude/projects/<encoded-project-path>/memory/`). Because mdredd's storage
- * root lives inside the user's project (`<cwd>/agents/mdredd/...`), the upward
- * walk would otherwise hit the real `.git` and treat the run as if it were the
- * host project.
+ * (`~/.claude/projects/<encoded-project-path>/memory/`). Without this guard the
+ * upward walk could reach a real `.git` and treat the run as if it were the
+ * surrounding project.
  *
  * Planting a sandbox-local `.git/` here terminates that walk inside the run dir.
  * The repo is intentionally empty (no commits) so `git status` / `git log` from
