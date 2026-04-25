@@ -130,7 +130,7 @@ function sleep(ms) {
 }
 
 function emitSystemInit() {
-  emit({
+  const payload = {
     type: 'system',
     subtype: 'init',
     cwd: env.PWD ?? '',
@@ -140,7 +140,13 @@ function emitSystemInit() {
     permissionMode: 'default',
     claude_code_version: 'fake-0.0.1',
     uuid: `init-${sessionId}`,
-  });
+  };
+  // Allow the smoke test to inject a memory_paths.auto so we can exercise the
+  // runner's context-leak detection without needing a real claude.
+  if (env.FAKE_CLAUDE_AUTO_MEMORY) {
+    payload.memory_paths = { auto: env.FAKE_CLAUDE_AUTO_MEMORY };
+  }
+  emit(payload);
 }
 
 function emitMessageStart() {

@@ -1,11 +1,30 @@
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Runner } from '../src/server/runner.js';
 import { buildSandbox } from '../src/server/sandbox.js';
 import type { RunConfig } from '@shared/schemas/run.js';
 
 const fakeBin = new URL('./fake-claude.mjs', import.meta.url).pathname;
+
+function captureStderr(): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const orig = process.stderr.write.bind(process.stderr);
+  // Cast through unknown to satisfy the overloaded write signature.
+  const tap = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    const text =
+      typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    lines.push(text);
+    return (orig as unknown as (...args: unknown[]) => boolean)(chunk, ...rest);
+  }) as unknown as typeof process.stderr.write;
+  process.stderr.write = tap;
+  return {
+    lines,
+    restore: () => {
+      process.stderr.write = orig;
+    },
+  };
+}
 
 async function scenario(name: string, run: () => Promise<void>): Promise<void> {
   process.stdout.write(`• ${name} … `);
@@ -380,6 +399,100 @@ await scenario('auth-error: non-zero exit → errored', async () => {
     const stderr = await readFile(join(runDir, 'stderr.log'), 'utf8').catch(() => '');
     if (!stderr.includes('Authentication required')) {
       throw new Error('stderr.log should contain the auth error');
+    }
+  });
+});
+
+await scenario('init.json: persisted with the system init payload', async () => {
+  await withSandbox('init-artifact', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const runner = new Runner({
+      claudeBin: fakeBin,
+      projectDir,
+      runDir,
+      outputsDir,
+      prompt: 'hello',
+      model: 'haiku',
+      mode: 'read-only',
+      initialConfig,
+      env: { ...process.env, FAKE_CLAUDE_SCENARIO: 'happy' },
+    });
+    await runner.start();
+    const final = await runner.wait();
+    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+    const initRaw = await readFile(join(runDir, 'init.json'), 'utf8');
+    const init = JSON.parse(initRaw);
+    if (init.type !== 'system' || init.subtype !== 'init') {
+      throw new Error(`init.json missing system/init markers: ${initRaw.slice(0, 120)}`);
+    }
+    if (typeof init.session_id !== 'string' || !init.session_id.startsWith('fake-')) {
+      throw new Error(`init.json session_id unexpected: ${init.session_id}`);
+    }
+  });
+});
+
+await scenario('init context leak: warns when auto-memory falls outside the run dir', async () => {
+  await withSandbox('init-leak', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const cap = captureStderr();
+    try {
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'hello',
+        model: 'haiku',
+        mode: 'read-only',
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'happy',
+          // Path deliberately omits the run folder name → mimics the host-project
+          // auto-memory dir Claude Code would load if it walked up to a real .git.
+          FAKE_CLAUDE_AUTO_MEMORY: '/tmp/some-other-project/memory/',
+        },
+      });
+      await runner.start();
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const captured = cap.lines.join('');
+      if (!captured.includes('runner.context-leak.auto-memory')) {
+        throw new Error(`expected leakage warn, captured stderr was:\n${captured}`);
+      }
+    } finally {
+      cap.restore();
+    }
+  });
+});
+
+await scenario('init context safe: no warn when auto-memory is inside the run dir', async () => {
+  await withSandbox('init-safe', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const cap = captureStderr();
+    try {
+      const safeAuto = `/Users/test/.claude/projects/-${basename(runDir)}-project/memory/`;
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'hello',
+        model: 'haiku',
+        mode: 'read-only',
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'happy',
+          FAKE_CLAUDE_AUTO_MEMORY: safeAuto,
+        },
+      });
+      await runner.start();
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const captured = cap.lines.join('');
+      if (captured.includes('runner.context-leak.auto-memory')) {
+        throw new Error(`unexpected leakage warn for safe auto-memory:\n${captured}`);
+      }
+    } finally {
+      cap.restore();
     }
   });
 });
