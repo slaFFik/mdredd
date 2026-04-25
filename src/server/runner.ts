@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createWriteStream, type WriteStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { readdir, stat, writeFile } from 'node:fs/promises';
+import { basename, join, relative } from 'node:path';
 import { ClaudeStreamParser } from './claudeStream.js';
 import { log } from './log.js';
 import { atomicWriteJson, ensureDir } from './fsUtil.js';
@@ -151,6 +151,9 @@ export class Runner extends EventEmitter {
     });
     this.parser.on('novelType', (t) => {
       log.warn('runner.novel-event-type', { type: t });
+    });
+    this.parser.on('systemInit', (raw) => {
+      this.handleSystemInit(raw);
     });
     this.parser.on('result', (payload) => {
       // CLI's final event carries authoritative usage + cost totals.
@@ -308,6 +311,38 @@ export class Runner extends EventEmitter {
     await atomicWriteJson(join(this.input.runDir, 'config.json'), this.input.initialConfig);
   }
 
+  /**
+   * Persist the child's `system init` payload as `init.json` for audit, and warn
+   * if it shows context leakage from the host project.
+   *
+   * Leakage signal: the child reports `memory_paths.auto` (the per-project
+   * auto-memory directory it loaded). With the sandbox `.git/` planted, this
+   * path's encoded form should contain the run folder name. If it doesn't,
+   * Claude Code resolved the project root somewhere outside the sandbox —
+   * meaning host-project auto-memory and git state are bleeding in.
+   */
+  private handleSystemInit(raw: Record<string, unknown>): void {
+    writeFile(
+      join(this.input.runDir, 'init.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    ).catch((err) => {
+      log.warn('runner.init-write-failed', { error: (err as Error).message });
+    });
+
+    const memoryPaths = raw.memory_paths as Record<string, unknown> | undefined;
+    const auto = memoryPaths?.auto;
+    if (typeof auto !== 'string' || auto.length === 0) return;
+    const runFolderName = basename(this.input.runDir);
+    if (!auto.includes(runFolderName)) {
+      log.warn('runner.context-leak.auto-memory', {
+        runFolder: runFolderName,
+        autoMemoryPath: auto,
+        hint: 'child resolved a project root outside the sandbox; host auto-memory is being injected into context',
+      });
+    }
+  }
+
   private buildArgs(): string[] {
     const tools = this.input.allowedTools ?? (this.input.mode === 'write' ? WRITE_TOOLS : READ_ONLY_TOOLS);
     const toolsStr = tools.join(',');
@@ -336,6 +371,19 @@ export class Runner extends EventEmitter {
     const base: NodeJS.ProcessEnv = { ...(this.input.env ?? process.env) };
     // Strip NODE_OPTIONS: don't let our harness inject debuggers/loaders into the child.
     delete base.NODE_OPTIONS;
+    // Strip git-discovery env vars. If any of these are set in the parent shell
+    // (e.g. user invoked mdredd from inside a git operation, or has GIT_DIR
+    // exported), they would override the planted sandbox .git/ and redirect
+    // the child to the host project's git state.
+    delete base.GIT_DIR;
+    delete base.GIT_WORK_TREE;
+    delete base.GIT_INDEX_FILE;
+    delete base.GIT_COMMON_DIR;
+    delete base.GIT_CEILING_DIRECTORIES;
+    // Strip Claude Code project-id hints that could override the cwd-based
+    // project resolution and re-anchor auto-memory to the host project.
+    delete base.CLAUDE_PROJECT_DIR;
+    delete base.CLAUDE_PROJECT_NAME;
     // Keep HOME / CLAUDE_CONFIG_DIR as-is so the child can read the user's auth.
     return base;
   }

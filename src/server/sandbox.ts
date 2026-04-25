@@ -37,7 +37,9 @@ export interface SandboxResult {
  *
  * Hard-excluded regardless of gitignore:
  *   - agents/mdredd       (our own storage)
- *   - .git                (keep variant runs away from git state; opt-in for v2)
+ *   - .git                (keep variant runs away from git state; we plant a fresh
+ *                          sandbox .git below so child claude can't walk upward
+ *                          and rediscover the host project's .git)
  *   - .claude             (skill/agent variants create a fresh .claude; CLAUDE.md variant
  *                          still skips user .claude to ensure a clean A/B baseline)
  *   - the variant's own canonical path (we write it ourselves below)
@@ -49,6 +51,7 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
 
   await ensureDir(projectDir);
   await ensureDir(outputsDir);
+  await plantSandboxGitDir(projectDir);
 
   const ig = await loadRootGitignore(input.cwd);
   const cwdReal = await realpath(input.cwd);
@@ -171,6 +174,34 @@ export function canonicalVariantRelPath(input: {
   }
   if (input.variantType === 'skill') return `.claude/skills/${name}/SKILL.md`;
   return `.claude/agents/${name}.md`;
+}
+
+/**
+ * Plant a minimal, self-contained `.git/` inside the sandbox project dir.
+ *
+ * Claude Code's CLI walks up from cwd looking for `.git/` to determine the project
+ * root, which it then uses for two things that leak host context: auto-injected
+ * git status/branch/recent-commits, and the per-project auto-memory path
+ * (`~/.claude/projects/<encoded-project-path>/memory/`). Because mdredd's storage
+ * root lives inside the user's project (`<cwd>/agents/mdredd/...`), the upward
+ * walk would otherwise hit the real `.git` and treat the run as if it were the
+ * host project.
+ *
+ * Planting a sandbox-local `.git/` here terminates that walk inside the run dir.
+ * The repo is intentionally empty (no commits) so `git status` / `git log` from
+ * the child see a neutral fresh state instead of host history.
+ */
+async function plantSandboxGitDir(projectDir: string): Promise<void> {
+  const gitDir = join(projectDir, '.git');
+  await ensureDir(gitDir);
+  await ensureDir(join(gitDir, 'objects'));
+  await ensureDir(join(gitDir, 'refs', 'heads'));
+  await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/sandbox\n', 'utf8');
+  await writeFile(
+    join(gitDir, 'config'),
+    '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n',
+    'utf8',
+  );
 }
 
 async function writeSettings(projectDir: string): Promise<string> {
