@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSON5 from 'json5';
 import {
@@ -260,13 +261,24 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
       '',
       '--strict-mcp-config',
       '--setting-sources',
-      'project',
+      'user',
       '--disable-slash-commands',
     ];
     if (opts.jsonSchema) {
       args.push('--json-schema', JSON.stringify(JUDGE_MODEL_JSON_SCHEMA));
     }
-    const proc = spawn(claudeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Spawn from os.tmpdir() so the judge never inherits the user's project cwd.
+    // Combined with `--setting-sources user`, this prevents project `.claude/settings.json`,
+    // hooks, and tool overrides from silently contaminating judge scores (issue #3).
+    // Strip NODE_OPTIONS for the same reason runner.ts does — keep the harness from
+    // injecting debuggers/loaders into the judge child.
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    const proc = spawn(claudeBin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: tmpdir(),
+      env,
+    });
     let stdout = '';
     let stderr = '';
     proc.stdout.on('data', (d) => (stdout += d.toString()));
