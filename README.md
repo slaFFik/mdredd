@@ -38,14 +38,24 @@ MDredd runs two or three versions of the same instruction file in parallel — e
 
 You don't need an API key — MDredd piggybacks on your existing Claude Code auth.
 
+## Install
+
+```bash
+npm install
+npm run build
+npm link          # exposes `mdredd` on your PATH
+```
+
+After pulling source changes, re-run `npm run build` — the `mdredd` binary loads from `dist/`, not from source, so changes to `src/` won't take effect until the next build.
+
 ## How isolation works
 
-Each variant run gets its own sandbox under `agents/mdredd/<run-folder>/`. The child `claude` process is spawned with `cwd` set to `<run-folder>/project/`, so everything below describes what that working directory looks like — and what state from your machine reaches the child.
+Each variant run gets its own sandbox under `~/.mdredd/<run-folder>/`. Storage lives in your home directory, not inside the project being analyzed — this keeps the host project path out of the child's cwd, so the child can't trivially derive the host root and walk back into it. The child `claude` process is spawned with `cwd` set to `<run-folder>/project/`, so everything below describes what that working directory looks like — and what state from your machine reaches the child.
 
 ### Per-run sandbox layout
 
 ```
-<your project>/agents/mdredd/<run-folder>/
+~/.mdredd/<run-folder>/
 ├── project/                     ← child claude's cwd
 │   ├── .git/                    ← planted; empty repo on a `sandbox` branch
 │   ├── CLAUDE.md                ← (CLAUDE.md variants) the variant being tested
@@ -73,7 +83,7 @@ Each variant run gets its own sandbox under `agents/mdredd/<run-folder>/`. The c
 - **Your project's real `.git/`.** A self-contained empty `.git/` is planted in the sandbox before any symlinks, so Claude Code's upward project-root walk terminates inside the run folder. Result: `git status` is clean, `git branch --show-current` returns `sandbox`, `git log` reports no commits — none of your branch name, working-tree status, or recent commit subjects can be auto-injected into the child's system prompt.
 - **Your project's auto-memory.** Because Claude Code derives the per-project memory directory (`~/.claude/projects/<encoded-cwd>/memory/`) from where it found `.git`, the planted sandbox `.git/` redirects this lookup to a per-run path that's empty by default. Your project's accumulated `feedback_*.md` / `project_*.md` notes do not bleed in.
 - **Your project's `.claude/` directory.** Hard-excluded so an on-disk skill or agent file with the same name can't shadow the variant under test.
-- **`agents/mdredd/`** (mdredd's own storage), to keep variant runs out of each other's sandboxes.
+- **mdredd's own storage** (`~/.mdredd/`), to keep variant runs out of each other's sandboxes.
 - **Anything matched by your project's `.gitignore`** — `node_modules`, build outputs, etc.
 - **Inherited git/Claude env vars.** `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`, `CLAUDE_PROJECT_DIR`, `CLAUDE_PROJECT_NAME` are stripped from the spawn environment so an inherited shell can't override the planted sandbox. `NODE_OPTIONS` is also stripped.
 
