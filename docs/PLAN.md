@@ -217,8 +217,12 @@ The judge is **per-variant**, powered by **Haiku**. It runs independently for ea
      --output-format json \
      --tools        "" \
      --allowedTools "" \
-     --strict-mcp-config
+     --strict-mcp-config \
+     --setting-sources user
    ```
+   - `cwd` = `os.tmpdir()` (the judge must NOT inherit the user's project cwd, or it would walk up applying their `.claude/settings.json`, hooks, and project-scoped tool overrides — silent score contamination).
+   - `--setting-sources user` keeps the source explicit and predictable across projects.
+
    Judge uses no tools — it reads its inputs from the prompt and emits structured JSON. Output shape enforced via prompt + ajv validation (with `--json-schema` fallback if supported by the installed CLI).
 5. On schema failure, retry once with an error-explaining follow-up. Still invalid → `judge.json.status = "errored"` with the error surfaced in the UI; the column's run results are untouched.
 6. Write `<run>/judge.json`. Push `judge.updated` (or `judge.errored`) for that column over SSE.
