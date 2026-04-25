@@ -21,6 +21,7 @@ import {
 } from './lib/api.js';
 import { VariantColumn } from './components/VariantColumn.js';
 import { Footer, REPO_URL } from './components/Footer.js';
+import { Hint } from './components/Hint.js';
 
 type LiveEvent =
   | { kind: 'partial'; streamKind: 'text' | 'thinking'; chunk: string }
@@ -484,43 +485,47 @@ export function App(): JSX.Element {
   return (
     <>
       <div className="topbar">
-        <a
-          className="brand"
-          href={REPO_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="MDredd on GitHub"
-        >
-          MDredd
-        </a>
-        <button
-          className="chip"
-          aria-pressed={session.mode === 'write'}
-          onClick={onToggleMode}
-          title="Toggle write mode (applies to new runs; current runs keep their original mode)"
-        >
-          Mode: {session.mode === 'write' ? 'Write' : 'Read-only'}
-        </button>
-        <button
-          className="chip"
-          aria-pressed={session.judgeEnabled}
-          onClick={onToggleJudge}
-          title="Toggle judge (applies to new runs; current runs keep their original setting)"
-        >
-          Judge {session.judgeEnabled ? 'ON' : 'OFF'}
-        </button>
+        <Hint content="MDredd on GitHub">
+          <a
+            className="brand"
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            MDredd
+          </a>
+        </Hint>
+        <Hint content="Toggle write mode (applies to new runs; current runs keep their original mode)">
+          <button
+            className="chip"
+            aria-pressed={session.mode === 'write'}
+            onClick={onToggleMode}
+          >
+            Mode: {session.mode === 'write' ? 'Write' : 'Read-only'}
+          </button>
+        </Hint>
+        <Hint content="Toggle judge (applies to new runs; current runs keep their original setting)">
+          <button
+            className="chip"
+            aria-pressed={session.judgeEnabled}
+            onClick={onToggleJudge}
+          >
+            Judge {session.judgeEnabled ? 'ON' : 'OFF'}
+          </button>
+        </Hint>
         <span className="spacer" />
         <span style={{ color: 'var(--fg-dim)', fontFamily: 'var(--mono)', fontSize: 11 }}>
           {session.cwd}
         </span>
-        <button
-          className="chip"
-          onClick={() => dispatch({ type: 'set-confirm-start-new', open: true })}
-          disabled={anyRunning}
-          title={anyRunning ? 'Stop all running columns before starting new' : 'Wipe session and all runs'}
-        >
-          Start new
-        </button>
+        <Hint content={anyRunning ? 'Stop all running columns before starting new' : 'Wipe session and all runs'}>
+          <button
+            className="chip"
+            onClick={() => dispatch({ type: 'set-confirm-start-new', open: true })}
+            disabled={anyRunning}
+          >
+            Start new
+          </button>
+        </Hint>
       </div>
 
       {state.error && (
@@ -550,9 +555,11 @@ export function App(): JSX.Element {
           />
         ))}
         {session.columns.length < 3 && (
-          <button className="add-column" onClick={onAddColumn} title="Add a column">
-            +
-          </button>
+          <Hint content="Add a column">
+            <button className="add-column" onClick={onAddColumn}>
+              +
+            </button>
+          </Hint>
         )}
       </div>
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Hint } from './Hint.js';
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 
@@ -56,29 +57,29 @@ export function Footer(): JSX.Element {
   return (
     <footer className="footer">
       <div className="footer-links">
-        <a href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub">
-          <GitHubIcon />
-          <span>GitHub</span>
-        </a>
+        <Hint content="GitHub">
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+            <GitHubIcon />
+            <span>GitHub</span>
+          </a>
+        </Hint>
         <span className="footer-sep">·</span>
-        <a
-          href="https://ovirium.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Slava Abakumov"
-        >
-          Slava Abakumov
-        </a>
+        <Hint content="Slava Abakumov">
+          <a href="https://ovirium.com" target="_blank" rel="noopener noreferrer">
+            Slava Abakumov
+          </a>
+        </Hint>
       </div>
-      <button
-        type="button"
-        className="theme-toggle"
-        onClick={cycle}
-        aria-label={title}
-        title={title}
-      >
-        {mode === 'light' ? <SunIcon /> : mode === 'dark' ? <MoonIcon /> : <MonitorIcon />}
-      </button>
+      <Hint content={title}>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={cycle}
+          aria-label={title}
+        >
+          {mode === 'light' ? <SunIcon /> : mode === 'dark' ? <MoonIcon /> : <MonitorIcon />}
+        </button>
+      </Hint>
     </footer>
   );
 }

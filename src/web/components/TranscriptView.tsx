@@ -3,6 +3,7 @@ import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { ColumnLiveState } from '../App.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
+import { Hint } from './Hint.js';
 
 export function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -185,11 +186,13 @@ function RenderLive(props: {
         <div className="event turn-marker">
           <span>turn {e.turn}</span>
           <span className="turn-sep"> · </span>
-          <span title="Elapsed from run start to when this turn's final assistant message was emitted.">
-            {formatElapsed(e.elapsedMs)}
-          </span>
+          <Hint content="Elapsed from run start to when this turn's final assistant message was emitted.">
+            <span>{formatElapsed(e.elapsedMs)}</span>
+          </Hint>
           <span className="turn-sep"> · </span>
-          <span title={pluralizeToolCalls(props.toolsInTurn)}>{props.toolsInTurn}T</span>
+          <Hint content={pluralizeToolCalls(props.toolsInTurn)}>
+            <span>{props.toolsInTurn}T</span>
+          </Hint>
         </div>
       );
   }
@@ -208,11 +211,13 @@ function RenderNormalized(props: {
         <div className="event turn-marker">
           <span>turn {e.turn}</span>
           <span className="turn-sep"> · </span>
-          <span title="Elapsed from run start to when this turn's final assistant message was emitted.">
-            {formatElapsed(elapsed)}
-          </span>
+          <Hint content="Elapsed from run start to when this turn's final assistant message was emitted.">
+            <span>{formatElapsed(elapsed)}</span>
+          </Hint>
           <span className="turn-sep"> · </span>
-          <span title={pluralizeToolCalls(props.toolsInTurn)}>{props.toolsInTurn}T</span>
+          <Hint content={pluralizeToolCalls(props.toolsInTurn)}>
+            <span>{props.toolsInTurn}T</span>
+          </Hint>
         </div>
       );
     }

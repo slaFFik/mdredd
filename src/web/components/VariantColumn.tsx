@@ -18,6 +18,7 @@ import {
 } from './TranscriptView.js';
 import type { TokenUsage } from '@shared/schemas/run.js';
 import { JudgeCard } from './JudgeCard.js';
+import { Hint } from './Hint.js';
 
 const MODELS = [
   { id: 'sonnet', label: 'Sonnet' },
@@ -117,56 +118,59 @@ export function VariantColumn(props: {
           disabled={isLocked}
           onChange={(e) => void props.onPatchColumn(column.id, { variantName: e.target.value })}
         />
-        <select
-          value={column.model}
-          disabled={isLocked}
-          onChange={(e) => void props.onPatchColumn(column.id, { model: e.target.value })}
-          title="Model"
-        >
-          {MODELS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <div className="meta-row">
+        <Hint content="Model used for the variant run">
           <select
-            value={column.variantType}
+            value={column.model}
             disabled={isLocked}
-            onChange={(e) => {
-              const next = e.target.value as ColumnConfig['variantType'];
-              setExplicitCreate(false);
-              void props.onPatchColumn(column.id, {
-                variantType: next,
-                skillOrAgentName: next === 'CLAUDE.md' ? null : column.skillOrAgentName,
-              });
-            }}
-            title="Variant type"
+            onChange={(e) => void props.onPatchColumn(column.id, { model: e.target.value })}
           >
-            {VARIANT_TYPES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
+            {MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
               </option>
             ))}
           </select>
+        </Hint>
+        <div className="meta-row">
+          <Hint content="Variant type — CLAUDE.md, a skill (.claude/skills/), or an agent (.claude/agents/)">
+            <select
+              value={column.variantType}
+              disabled={isLocked}
+              onChange={(e) => {
+                const next = e.target.value as ColumnConfig['variantType'];
+                setExplicitCreate(false);
+                void props.onPatchColumn(column.id, {
+                  variantType: next,
+                  skillOrAgentName: next === 'CLAUDE.md' ? null : column.skillOrAgentName,
+                });
+              }}
+            >
+              {VARIANT_TYPES.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </Hint>
           {(column.variantType === 'skill' || column.variantType === 'agent') && (
             <>
-              <select
-                value={dropdownValue}
-                disabled={isLocked}
-                onChange={(e) => void onPickFromDropdown(e.target.value)}
-                title={`Pick a local ${column.variantType} or create new`}
-              >
-                <option value={PICKER_NONE}>
-                  {localList.length === 0 ? `(no local ${column.variantType}s)` : '(pick one…)'}
-                </option>
-                {localList.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
+              <Hint content={`Pick a local ${column.variantType} from .claude/ or create a new one`}>
+                <select
+                  value={dropdownValue}
+                  disabled={isLocked}
+                  onChange={(e) => void onPickFromDropdown(e.target.value)}
+                >
+                  <option value={PICKER_NONE}>
+                    {localList.length === 0 ? `(no local ${column.variantType}s)` : '(pick one…)'}
                   </option>
-                ))}
-                <option value={PICKER_NEW}>+ Create new {column.variantType}</option>
-              </select>
+                  {localList.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                  <option value={PICKER_NEW}>+ Create new {column.variantType}</option>
+                </select>
+              </Hint>
               {creatingNew && (
                 <input
                   type="text"
@@ -180,26 +184,28 @@ export function VariantColumn(props: {
                   }
                 />
               )}
-              <button
-                className="remove-column"
-                onClick={() => void props.onReloadLocalVariants()}
-                title="Rescan .claude/ for local skills/agents"
-                style={{ fontSize: 11 }}
-              >
-                ↻
-              </button>
+              <Hint content="Rescan .claude/ for local skills/agents">
+                <button
+                  className="remove-column"
+                  onClick={() => void props.onReloadLocalVariants()}
+                  style={{ fontSize: 11 }}
+                >
+                  ↻
+                </button>
+              </Hint>
             </>
           )}
           <span className={`badge ${status}`}>{status}</span>
           <span style={{ flex: 1 }} />
           {canRemove && !isLocked && (
-            <button
-              className="remove-column"
-              onClick={() => void props.onRemove(column.id)}
-              title="Remove column"
-            >
-              ×
-            </button>
+            <Hint content="Remove column">
+              <button
+                className="remove-column"
+                onClick={() => void props.onRemove(column.id)}
+              >
+                ×
+              </button>
+            </Hint>
           )}
         </div>
       </div>
@@ -222,10 +228,8 @@ export function VariantColumn(props: {
             Stop
           </button>
         ) : (
-          <button
-            onClick={() => void props.onRun(column.id)}
-            disabled={!canRun}
-            title={
+          <Hint
+            content={
               !column.prompt.trim()
                 ? 'Fill in a prompt'
                 : !column.variantContent.trim()
@@ -233,17 +237,22 @@ export function VariantColumn(props: {
                   : 'Run'
             }
           >
-            Run
-          </button>
+            <button
+              onClick={() => void props.onRun(column.id)}
+              disabled={!canRun}
+            >
+              Run
+            </button>
+          </Hint>
         )}
         <span className="status">
           {progressParts.map((p, i) => (
             <Fragment key={i}>
               {i > 0 && <span className="status-sep"> · </span>}
               {p.title ? (
-                <span className="status-part" title={p.title}>
-                  {p.text}
-                </span>
+                <Hint content={p.title}>
+                  <span className="status-part">{p.text}</span>
+                </Hint>
               ) : (
                 <span className="status-part">{p.text}</span>
               )}
