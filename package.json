@@ -22,7 +22,7 @@
     "test:judge": "tsx test/judge.spec.ts"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
     "get-port": "^7.1.0",
@@ -37,13 +37,13 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsc-alias": "^1.8.16",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^8.0.10"
   },
   "license": "MIT"
 }
