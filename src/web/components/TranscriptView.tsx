@@ -85,9 +85,13 @@ export function TranscriptView(props: {
   }, [props.runBundle?.transcript?.startedAt]);
 
   const liveTurnTools = useMemo(() => computeLiveTurnTools(props.live.events), [props.live.events]);
-  const transcriptTurnTools = useMemo(
-    () => computeNormalizedTurnTools(props.runBundle?.transcript?.events ?? []),
+  const transcriptEvents = useMemo(
+    () => collapseTranscriptEvents(props.runBundle?.transcript?.events ?? []),
     [props.runBundle?.transcript?.events],
+  );
+  const transcriptTurnTools = useMemo(
+    () => computeNormalizedTurnTools(transcriptEvents),
+    [transcriptEvents],
   );
 
   if (!hasLive && !props.runBundle?.transcript) {
@@ -114,7 +118,7 @@ export function TranscriptView(props: {
   let turnIdx = 0;
   return (
     <div className="transcript" ref={ref}>
-      {props.runBundle!.transcript!.events.map((e, i) => {
+      {transcriptEvents.map((e, i) => {
         if (e.t === 'turn') {
           const toolsInTurn = transcriptTurnTools[turnIdx] ?? 0;
           turnIdx += 1;
@@ -126,6 +130,34 @@ export function TranscriptView(props: {
       })}
     </div>
   );
+}
+
+/**
+ * Match the live view's rendering by:
+ *  - merging consecutive same-kind `partial` events into one chunk (the on-disk
+ *    transcript stores one event per delta, but the live reducer in App.tsx
+ *    collapses them — without this, each delta renders as its own block-level
+ *    div with margin, producing visual line breaks mid-sentence);
+ *  - dropping aggregate `message` events (intentional duplicates of partial
+ *    content kept in the transcript for durability — see claudeStream.ts;
+ *    rendering them too produces "[assistant] …" lines that repeat what the
+ *    partials already showed, plus bare "[assistant]" labels for messages
+ *    whose only content is `thinking` blocks).
+ */
+function collapseTranscriptEvents(events: NormalizedEvent[]): NormalizedEvent[] {
+  const out: NormalizedEvent[] = [];
+  for (const e of events) {
+    if (e.t === 'message') continue;
+    if (e.t === 'partial') {
+      const last = out[out.length - 1];
+      if (last && last.t === 'partial' && last.kind === e.kind) {
+        out[out.length - 1] = { ...last, chunk: last.chunk + e.chunk };
+        continue;
+      }
+    }
+    out.push(e);
+  }
+  return out;
 }
 
 /** For each turn index, count tool-use events that happened since the previous turn (or run start). */
