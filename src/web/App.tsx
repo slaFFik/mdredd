@@ -64,6 +64,7 @@ type Action =
   | { type: 'sse'; event: ServerSseEvent }
   | { type: 'session-patched'; payload: SessionFile }
   | { type: 'patch-column-local'; columnId: string; patch: Partial<ColumnConfig> }
+  | { type: 'optimistic-status'; columnId: string; status: ColumnStatus }
   | { type: 'error'; message: string }
   | { type: 'clear-error' }
   | { type: 'set-confirm-start-new'; open: boolean }
@@ -123,6 +124,11 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'sse':
       return applySse(state, action.event);
+    case 'optimistic-status':
+      return {
+        ...state,
+        activeStatuses: { ...state.activeStatuses, [action.columnId]: action.status },
+      };
     case 'error':
       return { ...state, error: action.message };
     case 'clear-error':
@@ -403,13 +409,19 @@ export function App(): JSX.Element {
 
   const onRun = useCallback(
     async (columnId: string) => {
+      // Server slug derivation calls Haiku and can take 1-2s before the
+      // first SSE arrives. Flip to `preparing` immediately so the button
+      // becomes Stop and the variant fields lock — otherwise the user sees
+      // nothing happen and may double-click.
+      dispatch({ type: 'optimistic-status', columnId, status: 'preparing' });
       try {
         await runColumn(columnId);
       } catch (err) {
         dispatch({ type: 'error', message: (err as Error).message });
+        await loadAll();
       }
     },
-    [],
+    [loadAll],
   );
 
   const onStop = useCallback(async (columnId: string) => {
@@ -569,7 +581,7 @@ export function App(): JSX.Element {
             <h3>Start new?</h3>
             <p>
               This wipes <code>session.json</code> and every run folder under{' '}
-              <code>agents/mdredd/</code>, except <code>.gitignore</code> and <code>.lock</code>.
+              <code>~/.mdredd/</code>, except <code>.gitignore</code> and <code>.lock</code>.
             </p>
             <div className="actions">
               <button onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>Cancel</button>
@@ -590,7 +602,7 @@ export function App(): JSX.Element {
             <h3>Remove variant column?</h3>
             <p>
               This removes the column from the current session. Any runs for this column stay on
-              disk under <code>agents/mdredd/</code> but won't be visible here.
+              disk under <code>~/.mdredd/</code> but won't be visible here.
             </p>
             <div className="actions">
               <button
