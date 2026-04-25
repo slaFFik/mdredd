@@ -121,18 +121,49 @@ function buildJudgePrompt(input: JudgeInput): string {
   return lines.join('\n');
 }
 
-function extractFinalAssistantMessage(transcript: TranscriptFile): string {
-  const buffer: string[] = [];
-  for (const e of transcript.events) {
-    if (e.t === 'turn') {
-      buffer.length = 0;
-      continue;
-    }
-    if (e.t === 'partial' && e.kind === 'text') {
-      buffer.push(e.chunk);
+// Aggregate `assistant` messages from real claude come after each `message_stop` and
+// carry a `content` array of blocks like `[{type:"text", text:"…"}, {type:"tool_use", …}]`.
+// Pull out the text blocks and concatenate.
+function extractTextFromMessageContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const obj = block as { type?: unknown; text?: unknown };
+    if (obj.type === 'text' && typeof obj.text === 'string') {
+      parts.push(obj.text);
     }
   }
-  return buffer.join('') || '(no final message emitted)';
+  return parts.join('');
+}
+
+export function extractFinalAssistantMessage(transcript: TranscriptFile): string {
+  // Prefer aggregate `message` events with role==='assistant' — they are the canonical
+  // assistant text emitted by claude after each `message_stop`. Concatenate across
+  // turns so multi-turn analyses are visible to the judge (a brief "Done" closer
+  // should not erase the analysis that came before it). Fall back to the partial
+  // stream only when an aggregate never arrived — typically the wallclock-truncated
+  // last turn, where partials were emitted but `message_stop` never fired.
+  const segments: string[] = [];
+  let pendingPartials: string[] = [];
+
+  for (const e of transcript.events) {
+    if (e.t === 'message' && e.role === 'assistant') {
+      const text = extractTextFromMessageContent(e.content);
+      if (text) {
+        pendingPartials = [];
+        segments.push(text);
+      }
+    } else if (e.t === 'partial' && e.kind === 'text') {
+      pendingPartials.push(e.chunk);
+    }
+  }
+  if (pendingPartials.length > 0) {
+    const tail = pendingPartials.join('');
+    if (tail) segments.push(tail);
+  }
+  return segments.length === 0 ? '(no final message emitted)' : segments.join('\n\n');
 }
 
 function extractToolSummary(transcript: TranscriptFile): string[] {

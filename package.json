@@ -18,7 +18,8 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "start": "node dist/server/index.js",
-    "test:runner": "tsx test/runner.smoke.ts"
+    "test:runner": "tsx test/runner.smoke.ts",
+    "test:judge": "tsx test/judge.spec.ts"
   },
   "engines": {
     "node": ">=20.0.0"
