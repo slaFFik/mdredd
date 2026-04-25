@@ -39,6 +39,7 @@ export async function runJudge(input: JudgeInput): Promise<JudgeFile> {
       judgeModel: JUDGE_MODEL,
       status: 'ok',
       scores: parsed.scores,
+      scoreRationales: parsed.scoreRationales,
       rationale: parsed.rationale,
     };
     await atomicWriteJson(join(input.runDir, 'judge.json'), file);
@@ -75,8 +76,16 @@ Criteria:
 
 Output strictly a JSON object of the shape:
   { "scores": { "accuracy": N, "completeness": N, "adherence": N, "clarity": N },
+    "scoreRationales": {
+      "accuracy":     "≤ 300 chars: why this band and not the band above or below",
+      "completeness": "≤ 300 chars: why this band and not the band above or below",
+      "adherence":    "≤ 300 chars: why this band and not the band above or below",
+      "clarity":      "≤ 300 chars: why this band and not the band above or below"
+    },
     "rationale": "one paragraph, ≤ 600 characters, calling out what drove each score" }
-where each N is one of 0, 25, 50, 75, 100.
+where each N is one of 0, 25, 50, 75, 100. Each scoreRationales entry must
+explicitly justify the chosen band against neighboring bands — e.g. "75 not 100
+because <gap>" or "50 not 75 because <gap>". Do not just restate the score.
 `.trim();
 
 function buildJudgePrompt(input: JudgeInput): string {

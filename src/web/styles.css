@@ -142,6 +142,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .judge-card table { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); }
 .judge-card th, .judge-card td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--border); }
 .judge-card .score { font-weight: 600; text-align: right; }
+.judge-card tr[title]:hover { background: var(--badge-idle-bg); cursor: help; }
 .judge-card .rationale { margin-top: 8px; color: var(--fg-dim); }
 .judge-spinner {
   display: inline-block;

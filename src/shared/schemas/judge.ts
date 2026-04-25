@@ -19,14 +19,24 @@ export const JudgeScoresSchema = z.object({
 });
 export type JudgeScores = z.infer<typeof JudgeScoresSchema>;
 
+export const ScoreRationalesSchema = z.object({
+  accuracy: z.string().min(1).max(300),
+  completeness: z.string().min(1).max(300),
+  adherence: z.string().min(1).max(300),
+  clarity: z.string().min(1).max(300),
+});
+export type ScoreRationales = z.infer<typeof ScoreRationalesSchema>;
+
 // Shape the Haiku judge must emit as its primary output (enforced via --json-schema).
 export const JudgeModelOutputSchema = z.object({
   scores: JudgeScoresSchema,
+  scoreRationales: ScoreRationalesSchema,
   rationale: z.string().min(1).max(600),
 });
 export type JudgeModelOutput = z.infer<typeof JudgeModelOutputSchema>;
 
 // The wrapper we persist to disk. Includes status + metadata around the model's raw scorecard.
+// scoreRationales is optional so judge.json files written before the field existed still load.
 export const JudgeFileSchema = z.object({
   runFolder: z.string(),
   createdAt: z.string(),
@@ -34,6 +44,7 @@ export const JudgeFileSchema = z.object({
   status: z.enum(['ok', 'errored']),
   error: z.string().optional(),
   scores: JudgeScoresSchema.optional(),
+  scoreRationales: ScoreRationalesSchema.optional(),
   rationale: z.string().optional(),
 });
 export type JudgeFile = z.infer<typeof JudgeFileSchema>;
@@ -42,7 +53,7 @@ export type JudgeFile = z.infer<typeof JudgeFileSchema>;
 export const JUDGE_MODEL_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['scores', 'rationale'],
+  required: ['scores', 'scoreRationales', 'rationale'],
   properties: {
     scores: {
       type: 'object',
@@ -53,6 +64,17 @@ export const JUDGE_MODEL_JSON_SCHEMA = {
         completeness: { type: 'integer', enum: [0, 25, 50, 75, 100] },
         adherence: { type: 'integer', enum: [0, 25, 50, 75, 100] },
         clarity: { type: 'integer', enum: [0, 25, 50, 75, 100] },
+      },
+    },
+    scoreRationales: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['accuracy', 'completeness', 'adherence', 'clarity'],
+      properties: {
+        accuracy: { type: 'string', maxLength: 300, minLength: 1 },
+        completeness: { type: 'string', maxLength: 300, minLength: 1 },
+        adherence: { type: 'string', maxLength: 300, minLength: 1 },
+        clarity: { type: 'string', maxLength: 300, minLength: 1 },
       },
     },
     rationale: { type: 'string', maxLength: 600, minLength: 1 },
