@@ -106,7 +106,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .prompt-field textarea { min-height: 60px; }
 .variant-editor .row, .prompt-field .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .variant-editor label, .prompt-field label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--fg-dim); }
-.variant-editor .upload { margin-left: auto; }
+.variant-editor .upload { margin-left: auto; display: inline-flex; gap: 6px; }
 .variant-editor .upload button { background: var(--bg-elev-2); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
 
 .run-bar { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
@@ -142,7 +142,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
 .judge-card table { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--mono); }
 .judge-card th, .judge-card td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--border); }
 .judge-card .score { font-weight: 600; text-align: right; }
-.judge-card tr[title]:hover { background: var(--badge-idle-bg); cursor: help; }
+.judge-card tbody tr:hover { background: var(--badge-idle-bg); cursor: help; }
 .judge-card .rationale { margin-top: 8px; color: var(--fg-dim); }
 .judge-spinner {
   display: inline-block;
@@ -159,6 +159,21 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); f
   to { transform: rotate(360deg); }
 }
 .empty-hint { color: var(--fg-dim); padding: 16px; text-align: center; font-style: italic; }
+
+.hint {
+  max-width: 280px;
+  background: var(--bg-elev-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  user-select: none;
+}
+.hint-arrow { fill: var(--bg-elev-2); }
 
 .add-column { flex: 0 0 auto; align-self: stretch; border: 1px dashed var(--border); border-radius: 8px; background: transparent; color: var(--fg-dim); padding: 12px; font-size: 14px; cursor: pointer; min-width: 60px; }
 .add-column:disabled { opacity: 0.35; cursor: not-allowed; }

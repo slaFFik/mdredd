@@ -1,4 +1,21 @@
 import type { JudgeFile } from '@shared/schemas/judge.js';
+import type { ReactNode } from 'react';
+import { Hint } from './Hint.js';
+
+function ScoreRow(props: { label: string; score: number; rationale?: string }): JSX.Element {
+  const row: ReactNode = (
+    <tr>
+      <td>{props.label}</td>
+      <td className="score">{props.score}</td>
+    </tr>
+  );
+  if (!props.rationale) return row as JSX.Element;
+  return (
+    <Hint content={props.rationale} side="left" align="center">
+      {row}
+    </Hint>
+  );
+}
 
 export function JudgeCard(
   props: { judge: JudgeFile; judging?: never } | { judge?: never; judging: true },
@@ -24,17 +41,15 @@ export function JudgeCard(
   if (!j.scores) return <div className="judge-card"><em>Judge pending…</em></div>;
   const s = j.scores;
   const r = j.scoreRationales;
-  const rowTitle = (key: keyof NonNullable<typeof r>): string | undefined =>
-    r ? r[key] : undefined;
   return (
     <div className="judge-card">
       <strong>Judge ({j.judgeModel})</strong>
       <table>
         <tbody>
-          <tr title={rowTitle('accuracy')}><td>Accuracy</td><td className="score">{s.accuracy}</td></tr>
-          <tr title={rowTitle('completeness')}><td>Completeness</td><td className="score">{s.completeness}</td></tr>
-          <tr title={rowTitle('adherence')}><td>Adherence</td><td className="score">{s.adherence}</td></tr>
-          <tr title={rowTitle('clarity')}><td>Clarity</td><td className="score">{s.clarity}</td></tr>
+          <ScoreRow label="Accuracy" score={s.accuracy} rationale={r?.accuracy} />
+          <ScoreRow label="Completeness" score={s.completeness} rationale={r?.completeness} />
+          <ScoreRow label="Adherence" score={s.adherence} rationale={r?.adherence} />
+          <ScoreRow label="Clarity" score={s.clarity} rationale={r?.clarity} />
         </tbody>
       </table>
       {j.rationale && <div className="rationale">{j.rationale}</div>}

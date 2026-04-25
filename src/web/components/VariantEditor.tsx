@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { FilePickerModal } from './FilePickerModal.js';
+import { Hint } from './Hint.js';
 
 export function VariantEditor(props: {
   value: string;
@@ -22,12 +23,16 @@ export function VariantEditor(props: {
       <div className="row">
         <label>Variant</label>
         <span className="upload">
-          <button type="button" disabled={props.disabled} onClick={() => setPickerOpen(true)}>
-            Browse project…
-          </button>
-          <button type="button" disabled={props.disabled} onClick={() => inputRef.current?.click()}>
-            Upload…
-          </button>
+          <Hint content="Pick an existing file from this project — typically your current CLAUDE.md, a .claude/skills/<name>/SKILL.md, or .claude/agents/<name>.md.">
+            <button type="button" disabled={props.disabled} onClick={() => setPickerOpen(true)}>
+              Browse project…
+            </button>
+          </Hint>
+          <Hint content="Pick a file from anywhere on your computer (outside this project) — e.g. a draft on your Desktop or a file from another repo.">
+            <button type="button" disabled={props.disabled} onClick={() => inputRef.current?.click()}>
+              Upload…
+            </button>
+          </Hint>
           <input
             ref={inputRef}
             type="file"
