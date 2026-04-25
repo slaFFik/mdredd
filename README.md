@@ -38,6 +38,57 @@ MDredd runs two or three versions of the same instruction file in parallel — e
 
 You don't need an API key — MDredd piggybacks on your existing Claude Code auth.
 
+## How isolation works
+
+Each variant run gets its own sandbox under `agents/mdredd/<run-folder>/`. The child `claude` process is spawned with `cwd` set to `<run-folder>/project/`, so everything below describes what that working directory looks like — and what state from your machine reaches the child.
+
+### Per-run sandbox layout
+
+```
+<your project>/agents/mdredd/<run-folder>/
+├── project/                     ← child claude's cwd
+│   ├── .git/                    ← planted; empty repo on a `sandbox` branch
+│   ├── CLAUDE.md                ← (CLAUDE.md variants) the variant being tested
+│   ├── .claude/skills/<name>/SKILL.md   ← (skill variants)
+│   ├── .claude/agents/<name>.md         ← (agent variants)
+│   └── <top-level entries>      ← symlinked from your project, see below
+├── outputs/                     ← write target in Write mode; empty in read-only
+├── variant.md                   ← exact bytes of the variant we ran
+├── config.json                  ← run config + token usage + cost
+├── init.json                    ← child's `system init` payload (audit trail)
+├── stream.jsonl                 ← raw Claude Code stream
+├── transcript.json              ← normalized event log
+└── judge.json                   ← rubric scores (after judge runs)
+```
+
+### What the child claude sees
+
+- **The variant file**, written at its canonical path (`CLAUDE.md`, `.claude/skills/<name>/SKILL.md`, or `.claude/agents/<name>.md`).
+- **Symlinks to every top-level entry of your project** that isn't excluded — so `Read`, `Glob`, and `Grep` resolve to your real files. This is intentional: it keeps stack detection realistic, so skills like `pest-testing`, `inertia-react-development`, etc. that Claude Code auto-suggests from `composer.json` / `package.json` still load the way they would in a real session.
+- **Your global Claude Code auth** (`HOME` / `CLAUDE_CONFIG_DIR` are passed through unmodified) so the child can talk to the API.
+- **Your user-global instructions at `~/.claude/CLAUDE.md`** and any user-global skills/agents/plugins/MCP servers you have installed — these are part of "how Claude behaves on your machine" and are deliberately not stripped.
+
+### What the child claude does **not** see
+
+- **Your project's real `.git/`.** A self-contained empty `.git/` is planted in the sandbox before any symlinks, so Claude Code's upward project-root walk terminates inside the run folder. Result: `git status` is clean, `git branch --show-current` returns `sandbox`, `git log` reports no commits — none of your branch name, working-tree status, or recent commit subjects can be auto-injected into the child's system prompt.
+- **Your project's auto-memory.** Because Claude Code derives the per-project memory directory (`~/.claude/projects/<encoded-cwd>/memory/`) from where it found `.git`, the planted sandbox `.git/` redirects this lookup to a per-run path that's empty by default. Your project's accumulated `feedback_*.md` / `project_*.md` notes do not bleed in.
+- **Your project's `.claude/` directory.** Hard-excluded so an on-disk skill or agent file with the same name can't shadow the variant under test.
+- **`agents/mdredd/`** (mdredd's own storage), to keep variant runs out of each other's sandboxes.
+- **Anything matched by your project's `.gitignore`** — `node_modules`, build outputs, etc.
+- **Inherited git/Claude env vars.** `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`, `CLAUDE_PROJECT_DIR`, `CLAUDE_PROJECT_NAME` are stripped from the spawn environment so an inherited shell can't override the planted sandbox. `NODE_OPTIONS` is also stripped.
+
+### Verifying isolation on a real run
+
+Two artifacts make this auditable:
+
+1. **`<run>/init.json`** — the full `system init` payload the child reported (cwd, tools, skills, MCP servers, `memory_paths.auto`, etc.). This is what was actually true at the start of the run, not what we hoped was true.
+2. **`runner.context-leak.auto-memory` warn log.** If the child's reported `memory_paths.auto` doesn't include the run-folder name, mdredd writes a warning to its server stderr. That's the smoke alarm: it means Claude Code somehow resolved a project root outside the sandbox and is loading host auto-memory.
+
+### Known limits
+
+- A baseline ~5–10k cache-creation tokens still come from Claude Code's own system prompt, tool schemas, and your user-global config (`~/.claude/CLAUDE.md`, user-level skills). That overhead is the same for every variant in a session, so it cancels out in A/B comparisons — but it's not zero.
+- Symlinks mean `realpath()` of any file inside the sandbox resolves outside it. If a future Claude Code version starts using `realpath` for project resolution instead of `.git` walking, the planted `.git/` won't catch that path. Watch `init.json`'s `memory_paths.auto` after Claude Code updates.
+
 ## Status
 
 Early development.
