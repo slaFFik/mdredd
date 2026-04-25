@@ -305,9 +305,11 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
 function tryParseJudgeOutput(
   raw: string,
 ): { ok: true; value: JudgeModelOutput } | { ok: false; error: string } {
-  // The --output-format json wrapper returns a top-level { result: "…json body…", … }.
-  // Real haiku occasionally wraps the judge object in markdown fences or adds prose,
-  // so we try several extraction strategies in order.
+  // The --output-format json wrapper returns a top-level envelope. When --json-schema
+  // is set, the schema-conformant body lands under `structured_output` (already an
+  // object) and `result` is typically empty. Older CLIs or non-schema retries put a
+  // JSON-ish string in `result` — possibly wrapped in markdown fences or prose — so
+  // we try several extraction strategies in order.
   let outerParsed: unknown;
   try {
     outerParsed = JSON.parse(raw);
@@ -317,8 +319,12 @@ function tryParseJudgeOutput(
     return { ok: false, error: 'judge output was not valid JSON' };
   }
 
-  const outer = outerParsed as { result?: unknown };
-  if (typeof outer?.result === 'string') {
+  const outer = outerParsed as { result?: unknown; structured_output?: unknown };
+  if (outer?.structured_output && typeof outer.structured_output === 'object') {
+    const fromStructured = JudgeModelOutputSchema.safeParse(outer.structured_output);
+    if (fromStructured.success) return { ok: true, value: fromStructured.data };
+  }
+  if (typeof outer?.result === 'string' && outer.result.trim() !== '') {
     const fromResult = extractAndValidate(outer.result);
     if (fromResult.ok) return fromResult;
   }
@@ -326,10 +332,18 @@ function tryParseJudgeOutput(
   const asEnvelope = JudgeModelOutputSchema.safeParse(outerParsed);
   if (asEnvelope.success) return { ok: true, value: asEnvelope.data };
 
-  if (typeof outer?.result === 'string') {
-    const lastTry = extractAndValidate(outer.result);
-    if (!lastTry.ok) return lastTry;
-    return lastTry;
+  if (typeof outer?.result === 'string' && outer.result.trim() !== '') {
+    return extractAndValidate(outer.result);
+  }
+  if (outer?.structured_output && typeof outer.structured_output === 'object') {
+    const issues = JudgeModelOutputSchema.safeParse(outer.structured_output);
+    if (!issues.success) {
+      return {
+        ok: false,
+        error: 'structured_output present but did not match schema: ' +
+          issues.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; '),
+      };
+    }
   }
   return {
     ok: false,
