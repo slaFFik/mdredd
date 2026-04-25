@@ -3,6 +3,7 @@ import type { ServerSseEvent } from '@shared/schemas/events.js';
 import type { ColumnConfig, SessionFile } from '@shared/schemas/session.js';
 import type { ColumnStatus } from '@shared/schemas/types.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
+import { JUDGE_MODEL } from '@shared/constants.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { LocalVariantsResponse } from '@shared/schemas/localVariants.js';
 import {
@@ -50,6 +51,7 @@ export interface AppState {
   >;
   activeStatuses: Record<string, ColumnStatus>;
   live: Record<string, ColumnLiveState>;
+  judgingByColumn: Record<string, boolean>;
   connecting: boolean;
   error: string | null;
   confirmStartNew: boolean;
@@ -78,6 +80,7 @@ function initialState(): AppState {
     runs: {},
     activeStatuses: {},
     live: {},
+    judgingByColumn: {},
     connecting: true,
     error: null,
     confirmStartNew: false,
@@ -255,13 +258,18 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
       };
     }
     case 'judge.started':
-      return state;
+      return {
+        ...state,
+        judgingByColumn: { ...state.judgingByColumn, [event.col]: true },
+      };
     case 'judge.updated': {
       const payload = event.payload as JudgeFile;
       const existing = state.runs[payload.runFolder];
-      if (!existing) return state;
+      const judgingByColumn = { ...state.judgingByColumn, [event.col]: false };
+      if (!existing) return { ...state, judgingByColumn };
       return {
         ...state,
+        judgingByColumn,
         runs: {
           ...state.runs,
           [payload.runFolder]: { ...existing, judge: payload },
@@ -269,7 +277,28 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
       };
     }
     case 'judge.errored': {
-      return state;
+      const judgingByColumn = { ...state.judgingByColumn, [event.col]: false };
+      const col = state.session?.columns.find((c) => c.id === event.col);
+      const runFolder = col?.currentRunFolder ?? null;
+      if (!runFolder || !state.runs[runFolder]) {
+        return { ...state, judgingByColumn };
+      }
+      const existing = state.runs[runFolder];
+      const synthetic: JudgeFile = {
+        runFolder,
+        createdAt: new Date().toISOString(),
+        judgeModel: JUDGE_MODEL,
+        status: 'errored',
+        error: event.error,
+      };
+      return {
+        ...state,
+        judgingByColumn,
+        runs: {
+          ...state.runs,
+          [runFolder]: { ...existing, judge: synthetic },
+        },
+      };
     }
     case 'column.statusChanged':
       return {
@@ -509,6 +538,7 @@ export function App(): JSX.Element {
             status={state.activeStatuses[col.id] ?? 'idle'}
             live={state.live[col.id] ?? emptyLive()}
             runBundle={col.currentRunFolder ? state.runs[col.currentRunFolder] ?? null : null}
+            isJudging={state.judgingByColumn[col.id] ?? false}
             canRemove={session.columns.length > 1}
             mode={session.mode}
             localVariants={localVariants}

@@ -44,6 +44,7 @@ export function VariantColumn(props: {
     judge: JudgeFile | null;
     outputs: OutputFile[];
   } | null;
+  isJudging: boolean;
   canRemove: boolean;
   mode: Mode;
   localVariants: LocalVariantsResponse;
@@ -53,12 +54,13 @@ export function VariantColumn(props: {
   onStop: (columnId: string) => Promise<void>;
   onRemove: (columnId: string) => void | Promise<void>;
 }): JSX.Element {
-  const { column, status, live, runBundle, canRemove, mode, localVariants } = props;
+  const { column, status, live, runBundle, isJudging, canRemove, mode, localVariants } = props;
 
-  // A column only locks its OWN fields while it is streaming. Other columns stay
-  // fully editable — runs are independent and write to separate folders.
+  // Stream-time and judge-time lock its OWN fields. Other columns stay fully
+  // editable — runs are independent and write to separate folders.
   const isStreaming = status === 'streaming' || status === 'preparing';
-  const canRun = !isStreaming && column.prompt.trim() && column.variantContent.trim();
+  const isLocked = isStreaming || isJudging;
+  const canRun = !isLocked && column.prompt.trim() && column.variantContent.trim();
   const canStop = isStreaming;
 
   const progressParts = buildProgressParts(status, live, runBundle);
@@ -112,12 +114,12 @@ export function VariantColumn(props: {
           type="text"
           placeholder="Variant name (optional — will be auto-generated)"
           value={column.variantName}
-          disabled={isStreaming}
+          disabled={isLocked}
           onChange={(e) => void props.onPatchColumn(column.id, { variantName: e.target.value })}
         />
         <select
           value={column.model}
-          disabled={isStreaming}
+          disabled={isLocked}
           onChange={(e) => void props.onPatchColumn(column.id, { model: e.target.value })}
           title="Model"
         >
@@ -130,7 +132,7 @@ export function VariantColumn(props: {
         <div className="meta-row">
           <select
             value={column.variantType}
-            disabled={isStreaming}
+            disabled={isLocked}
             onChange={(e) => {
               const next = e.target.value as ColumnConfig['variantType'];
               setExplicitCreate(false);
@@ -151,7 +153,7 @@ export function VariantColumn(props: {
             <>
               <select
                 value={dropdownValue}
-                disabled={isStreaming}
+                disabled={isLocked}
                 onChange={(e) => void onPickFromDropdown(e.target.value)}
                 title={`Pick a local ${column.variantType} or create new`}
               >
@@ -170,7 +172,7 @@ export function VariantColumn(props: {
                   type="text"
                   placeholder={`new ${column.variantType} name (letters, numbers, _-)`}
                   value={column.skillOrAgentName ?? ''}
-                  disabled={isStreaming}
+                  disabled={isLocked}
                   onChange={(e) =>
                     void props.onPatchColumn(column.id, {
                       skillOrAgentName: e.target.value || null,
@@ -190,7 +192,7 @@ export function VariantColumn(props: {
           )}
           <span className={`badge ${status}`}>{status}</span>
           <span style={{ flex: 1 }} />
-          {canRemove && !isStreaming && (
+          {canRemove && !isLocked && (
             <button
               className="remove-column"
               onClick={() => void props.onRemove(column.id)}
@@ -269,7 +271,11 @@ export function VariantColumn(props: {
         </div>
       )}
 
-      {runBundle?.judge && <JudgeCard judge={runBundle.judge} />}
+      {runBundle?.judge ? (
+        <JudgeCard judge={runBundle.judge} />
+      ) : isJudging ? (
+        <JudgeCard judging />
+      ) : null}
     </div>
   );
 }

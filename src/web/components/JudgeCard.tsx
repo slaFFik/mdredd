@@ -1,6 +1,17 @@
 import type { JudgeFile } from '@shared/schemas/judge.js';
 
-export function JudgeCard(props: { judge: JudgeFile }): JSX.Element {
+export function JudgeCard(
+  props: { judge: JudgeFile; judging?: never } | { judge?: never; judging: true },
+): JSX.Element {
+  if (props.judging) {
+    return (
+      <div className="judge-card">
+        <strong>
+          <span className="judge-spinner" aria-hidden="true" /> Judging…
+        </strong>
+      </div>
+    );
+  }
   const j = props.judge;
   if (j.status === 'errored') {
     return (
