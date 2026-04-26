@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSandbox } from '../src/server/sandbox.js';
 import { listDir, readFileCapped, FsBrowserError } from '../src/server/fsBrowser.js';
 import { pathExists } from '../src/server/fsUtil.js';
 
+let failures = 0;
 async function scenario(name: string, run: () => Promise<void>): Promise<void> {
   process.stdout.write(`• ${name} … `);
   try {
@@ -12,8 +13,8 @@ async function scenario(name: string, run: () => Promise<void>): Promise<void> {
     process.stdout.write('PASS\n');
   } catch (err) {
     process.stdout.write('FAIL\n');
-    console.error(err);
-    process.exit(1);
+    console.error('  ' + (err as Error).message);
+    failures += 1;
   }
 }
 
@@ -44,7 +45,15 @@ async function listAllRel(dir: string, base = dir): Promise<string[]> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     const rel = full.slice(base.length + 1);
-    if (entry.isDirectory()) {
+    // stat-follow symlinks so the helper sees the same shape regardless of
+    // whether sandbox dirs are real dirs or directory-symlinks.
+    let isDir;
+    try {
+      isDir = (await stat(full)).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
       out.push(rel + '/');
       out.push(...(await listAllRel(full, base)));
     } else {
@@ -213,4 +222,8 @@ await scenario('fsBrowser: readFileCapped still works on real files', async () =
   });
 });
 
+if (failures > 0) {
+  console.log(`\n${failures} sandbox security scenario(s) FAILED.`);
+  process.exit(1);
+}
 console.log('\nAll sandbox security scenarios passed.');
