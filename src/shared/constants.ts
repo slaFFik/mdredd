@@ -20,7 +20,11 @@ export const PROJECT_MARKERS = [
   'pyproject.toml',
 ];
 
-export const JUDGE_MODEL = 'haiku';
+// Pin to a concrete model ID, not the `haiku` CLI alias: aliases can be
+// repointed to a future generation or removed, which would silently shift
+// score baselines or break the judge entirely (issue #13). Bump manually
+// when a new Haiku ships and rebaselining is acceptable.
+export const JUDGE_MODEL = 'claude-haiku-4-5';
 
 // Judge input budgets (plan § Judge flow step 2).
 export const JUDGE_PROMPT_CAP_BYTES = 4 * 1024;

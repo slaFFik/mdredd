@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
-import { PROJECT_MARKERS, STORAGE_DIR_NAME } from '@shared/constants.js';
+import { JUDGE_MODEL, PROJECT_MARKERS, STORAGE_DIR_NAME } from '@shared/constants.js';
 import { readdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { log } from './log.js';
 
@@ -104,7 +104,7 @@ export async function authSmokeTest(bin: string): Promise<void> {
     '-p',
     'ping',
     '--model',
-    'haiku',
+    JUDGE_MODEL,
     '--output-format',
     'json',
     '--tools',
