@@ -38,7 +38,12 @@ export function JudgeCard(
       </div>
     );
   }
-  if (!j.scores) return <div className="judge-card"><em>Judge pending…</em></div>;
+  if (!j.scores)
+    return (
+      <div className="judge-card">
+        <em>Judge pending…</em>
+      </div>
+    );
   const s = j.scores;
   const r = j.scoreRationales;
   return (

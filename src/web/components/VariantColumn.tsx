@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type JSX } from 'react';
+import { Fragment, useState, type JSX } from 'react';
 import type { ColumnConfig } from '@shared/schemas/session.js';
 import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
@@ -7,15 +7,15 @@ import type { LocalVariant, LocalVariantsResponse } from '@shared/schemas/localV
 import type { ColumnLiveState } from '../App.js';
 import { VariantEditor } from './VariantEditor.js';
 import { PromptField } from './PromptField.js';
+import { TranscriptView } from './TranscriptView.js';
 import {
-  TranscriptView,
   formatCost,
   formatElapsed,
   formatTokenCount,
   modelWorkElapsedMs,
   pluralizeToolCalls,
   pluralizeTurns,
-} from './TranscriptView.js';
+} from '../lib/format.js';
 import type { TokenUsage } from '@shared/schemas/run.js';
 import { JudgeCard } from './JudgeCard.js';
 import { Hint } from './Hint.js';
@@ -73,14 +73,12 @@ export function VariantColumn(props: {
     : false;
   const [explicitCreate, setExplicitCreate] = useState(false);
 
-  useEffect(() => {
-    if (column.variantType !== 'skill' && column.variantType !== 'agent') {
-      if (explicitCreate) setExplicitCreate(false);
-    }
-  }, [column.variantType, explicitCreate]);
-
+  // Derive "creating new" rather than syncing an effect: when variantType is
+  // not skill/agent, the picker isn't shown, so explicitCreate is irrelevant
+  // even if it was left true by a previous selection.
+  const isPickerType = column.variantType === 'skill' || column.variantType === 'agent';
   const creatingNew =
-    explicitCreate || (Boolean(column.skillOrAgentName) && !nameMatches);
+    isPickerType && (explicitCreate || (Boolean(column.skillOrAgentName) && !nameMatches));
 
   const onPickFromDropdown = async (value: string): Promise<void> => {
     if (value === PICKER_NONE) {
@@ -154,7 +152,9 @@ export function VariantColumn(props: {
           </Hint>
           {(column.variantType === 'skill' || column.variantType === 'agent') && (
             <>
-              <Hint content={`Pick a local ${column.variantType} from .claude/ or create a new one`}>
+              <Hint
+                content={`Pick a local ${column.variantType} from .claude/ or create a new one`}
+              >
                 <select
                   value={dropdownValue}
                   disabled={isLocked}
@@ -199,10 +199,7 @@ export function VariantColumn(props: {
           <span style={{ flex: 1 }} />
           {canRemove && !isLocked && (
             <Hint content="Remove column">
-              <button
-                className="remove-column"
-                onClick={() => void props.onRemove(column.id)}
-              >
+              <button className="remove-column" onClick={() => void props.onRemove(column.id)}>
                 ×
               </button>
             </Hint>
@@ -237,10 +234,7 @@ export function VariantColumn(props: {
                   : 'Run'
             }
           >
-            <button
-              onClick={() => void props.onRun(column.id)}
-              disabled={!canRun}
-            >
+            <button onClick={() => void props.onRun(column.id)} disabled={!canRun}>
               Run
             </button>
           </Hint>
@@ -261,11 +255,7 @@ export function VariantColumn(props: {
         </span>
       </div>
 
-      <TranscriptView
-        live={live}
-        runBundle={runBundle}
-        isStreaming={isStreaming}
-      />
+      <TranscriptView live={live} runBundle={runBundle} isStreaming={isStreaming} />
 
       {mode === 'write' && runBundle && runBundle.outputs.length > 0 && (
         <div className="outputs">
@@ -328,8 +318,7 @@ function buildProgressParts(
   if (runBundle) {
     const cfg = runBundle.config;
     const workElapsed = modelWorkElapsedMs(runBundle.transcript);
-    const toolCalls =
-      runBundle.transcript?.events.filter((e) => e.t === 'toolUse').length ?? 0;
+    const toolCalls = runBundle.transcript?.events.filter((e) => e.t === 'toolUse').length ?? 0;
     const parts: StatusPart[] = [
       { text: pluralizeTurns(cfg.turnCount) },
       { text: formatElapsed(workElapsed ?? cfg.wallClockMs), title: TIME_TITLE },

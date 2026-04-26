@@ -14,8 +14,7 @@ function captureStderr(): { lines: string[]; restore: () => void } {
   const orig = process.stderr.write.bind(process.stderr);
   // Cast through unknown to satisfy the overloaded write signature.
   const tap = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
-    const text =
-      typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
     lines.push(text);
     return (orig as unknown as (...args: unknown[]) => boolean)(chunk, ...rest);
   }) as unknown as typeof process.stderr.write;
@@ -135,7 +134,8 @@ await scenario('turn cap: many-turns scenario trips at cap', async () => {
     await runner.start();
     const final = await runner.wait();
     if (final.status !== 'truncated') throw new Error(`expected truncated, got ${final.status}`);
-    if (final.truncationReason !== 'turns') throw new Error(`expected turns reason, got ${final.truncationReason}`);
+    if (final.truncationReason !== 'turns')
+      throw new Error(`expected turns reason, got ${final.truncationReason}`);
   });
 });
 
@@ -156,7 +156,8 @@ await scenario('wallclock cap: long-running scenario trips', async () => {
     await runner.start();
     const final = await runner.wait();
     if (final.status !== 'truncated') throw new Error(`expected truncated, got ${final.status}`);
-    if (final.truncationReason !== 'wallclock') throw new Error(`expected wallclock, got ${final.truncationReason}`);
+    if (final.truncationReason !== 'wallclock')
+      throw new Error(`expected wallclock, got ${final.truncationReason}`);
   });
 });
 
@@ -279,17 +280,22 @@ await scenario('parallel tool calls: pairing by tool_use_id', async () => {
     const uses = transcript.events.filter((e) => e.t === 'toolUse');
     const results = transcript.events.filter((e) => e.t === 'toolResult');
     if (uses.length !== 2) throw new Error(`expected 2 toolUse events, got ${uses.length}`);
-    if (results.length !== 2) throw new Error(`expected 2 toolResult events, got ${results.length}`);
+    if (results.length !== 2)
+      throw new Error(`expected 2 toolResult events, got ${results.length}`);
     if (uses[0]!.id !== 'tu-0' || uses[1]!.id !== 'tu-1') {
       throw new Error(`toolUse ids: ${uses.map((u) => u.id).join(',')}`);
     }
     // Results arrive in reverse order (tu-1 before tu-0). Each must be paired
     // back to its tool_use by id, NOT to the most recent tool_use start.
     if (results[0]!.id !== 'tu-1' || results[0]!.tool !== 'Grep') {
-      throw new Error(`first result wrongly attributed: id=${results[0]!.id} tool=${results[0]!.tool}`);
+      throw new Error(
+        `first result wrongly attributed: id=${results[0]!.id} tool=${results[0]!.tool}`,
+      );
     }
     if (results[1]!.id !== 'tu-0' || results[1]!.tool !== 'Glob') {
-      throw new Error(`second result wrongly attributed: id=${results[1]!.id} tool=${results[1]!.tool}`);
+      throw new Error(
+        `second result wrongly attributed: id=${results[1]!.id} tool=${results[1]!.tool}`,
+      );
     }
     // Bodies match the right tool, not swapped.
     if (!results[0]!.resultSummary?.includes('grep result')) {
@@ -307,7 +313,10 @@ await scenario('parallel runs: stats are isolated per run', async () => {
     mkdtemp(join(tmpdir(), 'mdredd-smoke-cwd-')),
   ]);
   try {
-    const makeInput = (cwd: string, name: string): Promise<{
+    const makeInput = (
+      cwd: string,
+      name: string,
+    ): Promise<{
       runDir: string;
       projectDir: string;
       outputsDir: string;
@@ -410,7 +419,9 @@ await scenario('parallel runs: stats are isolated per run', async () => {
     const cfgA = JSON.parse(await readFile(join(inputA.runDir, 'config.json'), 'utf8'));
     const cfgB = JSON.parse(await readFile(join(inputB.runDir, 'config.json'), 'utf8'));
     if (cfgA.turnCount !== 2 || cfgB.turnCount !== 7) {
-      throw new Error(`on-disk config: A.turnCount=${cfgA.turnCount}, B.turnCount=${cfgB.turnCount}`);
+      throw new Error(
+        `on-disk config: A.turnCount=${cfgA.turnCount}, B.turnCount=${cfgB.turnCount}`,
+      );
     }
     if (cfgA.wallClockMs === cfgB.wallClockMs) {
       throw new Error('on-disk wallClockMs identical — suspicious');
@@ -544,60 +555,63 @@ await scenario('init context safe: no warn when auto-memory is inside the run di
   });
 });
 
-await scenario('runManager.stopAll: terminates active runners and persists cancelled transcripts', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-stopall-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
-  const savedDelay = process.env.FAKE_CLAUDE_DELAY_MS;
-  // Long-running fake; SIGTERM during the initial sleep cancels mid-stream so
-  // the runner has to follow the cancelled finalize path (issue #6 main risk).
-  process.env.FAKE_CLAUDE_SCENARIO = 'long';
-  process.env.FAKE_CLAUDE_DELAY_MS = '5000';
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    await session.mutate((s) => {
-      for (const [i, col] of s.columns.entries()) {
-        col.variantName = `stopall-var-${i}`; // explicit name skips the haiku slug spawn
-        col.variantContent = `# variant ${i}\n`;
-        col.prompt = `do thing ${i}`;
+await scenario(
+  'runManager.stopAll: terminates active runners and persists cancelled transcripts',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-stopall-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+    const savedDelay = process.env.FAKE_CLAUDE_DELAY_MS;
+    // Long-running fake; SIGTERM during the initial sleep cancels mid-stream so
+    // the runner has to follow the cancelled finalize path (issue #6 main risk).
+    process.env.FAKE_CLAUDE_SCENARIO = 'long';
+    process.env.FAKE_CLAUDE_DELAY_MS = '5000';
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      await session.mutate((s) => {
+        for (const [i, col] of s.columns.entries()) {
+          col.variantName = `stopall-var-${i}`; // explicit name skips the haiku slug spawn
+          col.variantContent = `# variant ${i}\n`;
+          col.prompt = `do thing ${i}`;
+        }
+      });
+      const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await runManager.init();
+
+      const cfg1 = await runManager.startColumn('col-1');
+      const cfg2 = await runManager.startColumn('col-2');
+      if (runManager.activeCount() !== 2) {
+        throw new Error(`expected 2 active runners, got ${runManager.activeCount()}`);
       }
-    });
-    const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
-    await runManager.init();
 
-    const cfg1 = await runManager.startColumn('col-1');
-    const cfg2 = await runManager.startColumn('col-2');
-    if (runManager.activeCount() !== 2) {
-      throw new Error(`expected 2 active runners, got ${runManager.activeCount()}`);
-    }
-
-    const result = await runManager.stopAll(5_000);
-    if (result.timedOut) throw new Error('stopAll should not have timed out');
-    if (result.stopped !== 2) throw new Error(`expected stopped=2, got ${result.stopped}`);
-    if (runManager.activeCount() !== 0) {
-      throw new Error(`expected 0 active after stopAll, got ${runManager.activeCount()}`);
-    }
-
-    for (const cfg of [cfg1, cfg2]) {
-      const txRaw = await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8');
-      const tx = JSON.parse(txRaw) as { status: string };
-      if (tx.status !== 'cancelled') {
-        throw new Error(`transcript ${cfg.runFolder}: expected cancelled, got ${tx.status}`);
+      const result = await runManager.stopAll(5_000);
+      if (result.timedOut) throw new Error('stopAll should not have timed out');
+      if (result.stopped !== 2) throw new Error(`expected stopped=2, got ${result.stopped}`);
+      if (runManager.activeCount() !== 0) {
+        throw new Error(`expected 0 active after stopAll, got ${runManager.activeCount()}`);
       }
-    }
 
-    // Idempotent: a second stopAll on a drained manager is a no-op.
-    const second = await runManager.stopAll(1_000);
-    if (second.stopped !== 0 || second.timedOut) {
-      throw new Error(`second stopAll mismatch: ${JSON.stringify(second)}`);
+      for (const cfg of [cfg1, cfg2]) {
+        const txRaw = await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8');
+        const tx = JSON.parse(txRaw) as { status: string };
+        if (tx.status !== 'cancelled') {
+          throw new Error(`transcript ${cfg.runFolder}: expected cancelled, got ${tx.status}`);
+        }
+      }
+
+      // Idempotent: a second stopAll on a drained manager is a no-op.
+      const second = await runManager.stopAll(1_000);
+      if (second.stopped !== 0 || second.timedOut) {
+        throw new Error(`second stopAll mismatch: ${JSON.stringify(second)}`);
+      }
+    } finally {
+      if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+      else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+      if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
+      else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
+      await rm(cwd, { recursive: true, force: true });
     }
-  } finally {
-    if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
-    else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
-    if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
-    else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 console.log('\nAll runner smoke scenarios passed.');

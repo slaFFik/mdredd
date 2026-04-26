@@ -3,58 +3,8 @@ import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { ColumnLiveState } from '../App.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
+import { formatElapsed, pluralizeToolCalls } from '../lib/format.js';
 import { Hint } from './Hint.js';
-
-export function formatElapsed(ms: number): string {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  const mm = Math.floor(totalSec / 60);
-  const ss = totalSec % 60;
-  return `${mm}:${String(ss).padStart(2, '0')}`;
-}
-
-export function pluralizeTurns(n: number): string {
-  return n === 1 ? '1 turn' : `${n} turns`;
-}
-
-export function pluralizeToolCalls(n: number): string {
-  return n === 1 ? '1 tool call' : `${n} tool calls`;
-}
-
-export function formatTokens(total: number): string {
-  return `${formatTokenCount(total)} tokens`;
-}
-
-export function formatTokenCount(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 10_000) return `${(n / 1000).toFixed(1)}K`;
-  if (n < 1_000_000) return `${Math.round(n / 1000)}K`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
-}
-
-export function formatCost(usd: number): string {
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
-}
-
-/**
- * Elapsed from run start to the last emitted normalized event's timestamp.
- * This is "time the model worked to return the results we display" — excludes
- * the subprocess finalization window (CLI emitting cost/usage before exit).
- */
-export function modelWorkElapsedMs(
-  transcript: TranscriptFile | null | undefined,
-): number | null {
-  if (!transcript || transcript.events.length === 0) return null;
-  const startMs = Date.parse(transcript.startedAt);
-  if (!Number.isFinite(startMs)) return null;
-  let lastTs = 0;
-  for (const e of transcript.events) {
-    if (e.ts > lastTs) lastTs = e.ts;
-  }
-  if (lastTs <= 0) return null;
-  return Math.max(0, lastTs - startMs);
-}
 
 export function TranscriptView(props: {
   live: ColumnLiveState;
@@ -85,6 +35,10 @@ export function TranscriptView(props: {
   }, [props.runBundle?.transcript?.startedAt]);
 
   const liveTurnTools = useMemo(() => computeLiveTurnTools(props.live.events), [props.live.events]);
+  const liveToolsByEventIdx = useMemo(
+    () => mapTurnToolsToEventIdx(props.live.events, (e) => e.kind === 'turn', liveTurnTools),
+    [props.live.events, liveTurnTools],
+  );
   const transcriptEvents = useMemo(
     () => collapseTranscriptEvents(props.runBundle?.transcript?.events ?? []),
     [props.runBundle?.transcript?.events],
@@ -93,43 +47,62 @@ export function TranscriptView(props: {
     () => computeNormalizedTurnTools(transcriptEvents),
     [transcriptEvents],
   );
+  const transcriptToolsByEventIdx = useMemo(
+    () => mapTurnToolsToEventIdx(transcriptEvents, (e) => e.t === 'turn', transcriptTurnTools),
+    [transcriptEvents, transcriptTurnTools],
+  );
 
   if (!hasLive && !props.runBundle?.transcript) {
-    return <div className="transcript"><div className="empty-hint">No transcript yet.</div></div>;
-  }
-
-  // Render live events during streaming; transcript events from disk once terminal.
-  if (props.isStreaming || hasLive) {
-    let turnIdx = 0;
     return (
-      <div className="transcript" ref={ref}>
-        {props.live.events.map((e, i) => {
-          if (e.kind === 'turn') {
-            const toolsInTurn = liveTurnTools[turnIdx] ?? 0;
-            turnIdx += 1;
-            return <RenderLive key={i} event={e} toolsInTurn={toolsInTurn} />;
-          }
-          return <RenderLive key={i} event={e} toolsInTurn={0} />;
-        })}
+      <div className="transcript">
+        <div className="empty-hint">No transcript yet.</div>
       </div>
     );
   }
 
-  let turnIdx = 0;
+  // Render live events during streaming; transcript events from disk once terminal.
+  if (props.isStreaming || hasLive) {
+    return (
+      <div className="transcript" ref={ref}>
+        {props.live.events.map((e, i) => (
+          <RenderLive key={i} event={e} toolsInTurn={liveToolsByEventIdx[i] ?? 0} />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="transcript" ref={ref}>
-      {transcriptEvents.map((e, i) => {
-        if (e.t === 'turn') {
-          const toolsInTurn = transcriptTurnTools[turnIdx] ?? 0;
-          turnIdx += 1;
-          return (
-            <RenderNormalized key={i} event={e} startedAtMs={transcriptStartedMs} toolsInTurn={toolsInTurn} />
-          );
-        }
-        return <RenderNormalized key={i} event={e} startedAtMs={transcriptStartedMs} toolsInTurn={0} />;
-      })}
+      {transcriptEvents.map((e, i) => (
+        <RenderNormalized
+          key={i}
+          event={e}
+          startedAtMs={transcriptStartedMs}
+          toolsInTurn={transcriptToolsByEventIdx[i] ?? 0}
+        />
+      ))}
     </div>
   );
+}
+
+/**
+ * Build a per-event-index lookup of "tools-in-turn" so render can stay pure
+ * (no in-render mutation of a running counter).
+ */
+function mapTurnToolsToEventIdx<T>(
+  events: readonly T[],
+  isTurn: (e: T) => boolean,
+  turnTools: readonly number[],
+): number[] {
+  const out: number[] = new Array(events.length).fill(0);
+  let turnIdx = 0;
+  events.forEach((e, i) => {
+    if (isTurn(e)) {
+      out[i] = turnTools[turnIdx] ?? 0;
+      turnIdx += 1;
+    }
+  });
+  return out;
 }
 
 /**
@@ -256,9 +229,17 @@ function RenderNormalized(props: {
     case 'partial':
       return <div className={`event ${e.kind}`}>{e.chunk}</div>;
     case 'message':
-      return <div className="event text">[{e.role}] {extractPlain(e.content)}</div>;
+      return (
+        <div className="event text">
+          [{e.role}] {extractPlain(e.content)}
+        </div>
+      );
     case 'toolUse':
-      return <div className="event tool-use">→ {e.tool}({truncate(e.argsSummary, 120)})</div>;
+      return (
+        <div className="event tool-use">
+          → {e.tool}({truncate(e.argsSummary, 120)})
+        </div>
+      );
     case 'toolResult':
       return (
         <div className={`event tool-result${e.isError ? ' err' : ''}`}>

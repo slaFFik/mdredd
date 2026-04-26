@@ -71,12 +71,7 @@ export function Footer(): JSX.Element {
         </Hint>
       </div>
       <Hint content={title}>
-        <button
-          type="button"
-          className="theme-toggle"
-          onClick={cycle}
-          aria-label={title}
-        >
+        <button type="button" className="theme-toggle" onClick={cycle} aria-label={title}>
           {mode === 'light' ? <SunIcon /> : mode === 'dark' ? <MoonIcon /> : <MonitorIcon />}
         </button>
       </Hint>

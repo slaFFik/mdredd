@@ -19,13 +19,13 @@ import type { Mode } from '@shared/schemas/types.js';
 
 export interface RunnerInput {
   claudeBin: string;
-  projectDir: string;       // child claude's cwd = <run>/project
-  runDir: string;           // <run>/ — where stream.jsonl, stderr.log, etc. live
-  outputsDir: string;       // <run>/outputs — scanned after run
+  projectDir: string; // child claude's cwd = <run>/project
+  runDir: string; // <run>/ — where stream.jsonl, stderr.log, etc. live
+  outputsDir: string; // <run>/outputs — scanned after run
   prompt: string;
   model: string;
   mode: Mode;
-  allowedTools?: string[];  // defaults based on mode
+  allowedTools?: string[]; // defaults based on mode
   caps?: { turns?: number; wallClockMs?: number };
   env?: NodeJS.ProcessEnv;
   initialConfig: RunConfig; // mutated in place as run progresses
@@ -101,10 +101,9 @@ export class Runner extends EventEmitter {
     await ensureDir(this.input.runDir);
     this.streamLog = createWriteStream(join(this.input.runDir, 'stream.jsonl'), { flags: 'a' });
     this.stderrLog = createWriteStream(join(this.input.runDir, 'stderr.log'), { flags: 'a' });
-    this.parseErrorsLog = createWriteStream(
-      join(this.input.runDir, 'parse-errors.log'),
-      { flags: 'a' },
-    );
+    this.parseErrorsLog = createWriteStream(join(this.input.runDir, 'parse-errors.log'), {
+      flags: 'a',
+    });
 
     await this.persistConfig();
 
@@ -157,7 +156,9 @@ export class Runner extends EventEmitter {
     });
     this.parser.on('result', (payload) => {
       // CLI's final event carries authoritative usage + cost totals.
-      const usage = (payload as Record<string, unknown>).usage as Record<string, unknown> | undefined;
+      const usage = (payload as Record<string, unknown>).usage as
+        | Record<string, unknown>
+        | undefined;
       if (usage) {
         this.input.initialConfig.tokenUsage = {
           inputTokens: Number(usage.input_tokens ?? 0),
@@ -222,7 +223,11 @@ export class Runner extends EventEmitter {
     await this.terminateChild();
   }
 
-  private trip(status: 'errored' | 'truncated', reason: string, truncationReason?: 'turns' | 'wallclock'): void {
+  private trip(
+    status: 'errored' | 'truncated',
+    reason: string,
+    truncationReason?: 'turns' | 'wallclock',
+  ): void {
     if (this.ended) return;
     if (status === 'truncated') {
       this.truncating = true;
@@ -258,7 +263,12 @@ export class Runner extends EventEmitter {
     });
   }
 
-  private finalize(status: RunStatus, exitCode: number | null, signal: NodeJS.Signals | null, errorMessage: string | null): void {
+  private finalize(
+    status: RunStatus,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+    errorMessage: string | null,
+  ): void {
     if (this.ended) return;
     this.ended = true;
     if (this.wallClockTimer) clearTimeout(this.wallClockTimer);
@@ -322,13 +332,11 @@ export class Runner extends EventEmitter {
    * meaning host-project auto-memory and git state are bleeding in.
    */
   private handleSystemInit(raw: Record<string, unknown>): void {
-    writeFile(
-      join(this.input.runDir, 'init.json'),
-      JSON.stringify(raw, null, 2),
-      'utf8',
-    ).catch((err) => {
-      log.warn('runner.init-write-failed', { error: (err as Error).message });
-    });
+    writeFile(join(this.input.runDir, 'init.json'), JSON.stringify(raw, null, 2), 'utf8').catch(
+      (err) => {
+        log.warn('runner.init-write-failed', { error: (err as Error).message });
+      },
+    );
 
     const memoryPaths = raw.memory_paths as Record<string, unknown> | undefined;
     const auto = memoryPaths?.auto;
@@ -344,7 +352,8 @@ export class Runner extends EventEmitter {
   }
 
   private buildArgs(): string[] {
-    const tools = this.input.allowedTools ?? (this.input.mode === 'write' ? WRITE_TOOLS : READ_ONLY_TOOLS);
+    const tools =
+      this.input.allowedTools ?? (this.input.mode === 'write' ? WRITE_TOOLS : READ_ONLY_TOOLS);
     const toolsStr = tools.join(',');
     const args = [
       '-p',
@@ -416,4 +425,3 @@ export class Runner extends EventEmitter {
     return out;
   }
 }
-

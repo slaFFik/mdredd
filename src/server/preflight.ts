@@ -49,7 +49,7 @@ async function checkClaudeCli(bin: string): Promise<void> {
     const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 5_000 });
     const trimmed = stdout.trim();
     log.info('preflight.claude-version', { version: trimmed });
-  } catch (err) {
+  } catch {
     throw new PreflightError(
       'claude-missing',
       `Could not execute ${bin} --version.`,
@@ -135,7 +135,9 @@ export async function authSmokeTest(bin: string): Promise<void> {
       env,
     });
     let stderr = '';
-    proc.stdout.on('data', () => { /* drain */ });
+    proc.stdout.on('data', () => {
+      /* drain */
+    });
     proc.stderr.on('data', (d) => (stderr += d.toString()));
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -184,7 +186,9 @@ export async function authSmokeTest(bin: string): Promise<void> {
 }
 
 function isLikelyAuthError(stderr: string): boolean {
-  return /\b(auth|authenticat|login|unauthori[sz]ed|401|403|api[_ -]?key|credentials?)\b/i.test(stderr);
+  return /\b(auth|authenticat|login|unauthori[sz]ed|401|403|api[_ -]?key|credentials?)\b/i.test(
+    stderr,
+  );
 }
 
 async function cwdGuard(cwd: string, force: boolean, storageRoot: string): Promise<void> {

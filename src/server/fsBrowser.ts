@@ -7,13 +7,13 @@ const MAX_READ_BYTES = 1 * 1024 * 1024; // 1 MB
 
 export interface FsEntry {
   name: string;
-  path: string;          // relative to cwd, forward slashes
+  path: string; // relative to cwd, forward slashes
   isDirectory: boolean;
-  size: number;          // 0 for directories
+  size: number; // 0 for directories
 }
 
 export interface FsListResult {
-  path: string;          // normalized relative path that was listed
+  path: string; // normalized relative path that was listed
   entries: FsEntry[];
 }
 
@@ -112,10 +112,7 @@ export async function readFileCapped(cwd: string, relPath: string): Promise<FsRe
   const scanLen = Math.min(buf.length, 8192);
   for (let i = 0; i < scanLen; i++) {
     if (buf[i] === 0) {
-      throw new FsBrowserError(
-        new Error(`file appears to be binary: ${safePath}`),
-        'binary',
-      );
+      throw new FsBrowserError(new Error(`file appears to be binary: ${safePath}`), 'binary');
     }
   }
   return { path: safePath, content: buf.toString('utf8'), size: s.size };

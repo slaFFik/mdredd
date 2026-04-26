@@ -23,13 +23,20 @@ async function expectPreflightError(
     await fn();
   } catch (err) {
     if (!(err instanceof PreflightError)) {
-      throw new Error(`expected PreflightError, got ${(err as Error).constructor.name}: ${(err as Error).message}`);
+      throw new Error(
+        `expected PreflightError, got ${(err as Error).constructor.name}: ${(err as Error).message}`,
+        { cause: err },
+      );
     }
     if (err.code !== expectedCode) {
-      throw new Error(`expected code ${expectedCode}, got ${err.code} — ${err.message}`);
+      throw new Error(`expected code ${expectedCode}, got ${err.code} — ${err.message}`, {
+        cause: err,
+      });
     }
     if (!err.hint || !err.hint.includes(hintMustInclude)) {
-      throw new Error(`expected hint to include "${hintMustInclude}", got: ${err.hint}`);
+      throw new Error(`expected hint to include "${hintMustInclude}", got: ${err.hint}`, {
+        cause: err,
+      });
     }
     return err;
   }
@@ -47,23 +54,26 @@ await scenario('authSmokeTest: passes when fake-claude exits 0', async () => {
   }
 });
 
-await scenario('authSmokeTest: surfaces `claude login` hint when fake-claude is unauthenticated', async () => {
-  const prevScenario = process.env.FAKE_CLAUDE_SCENARIO;
-  process.env.FAKE_CLAUDE_SCENARIO = 'auth-error';
-  try {
-    const err = await expectPreflightError(
-      () => authSmokeTest(fakeBin),
-      'claude-auth-failed',
-      'claude login',
-    );
-    if (!err.message.includes('Authentication required')) {
-      throw new Error(`expected stderr tail in message, got: ${err.message}`);
+await scenario(
+  'authSmokeTest: surfaces `claude login` hint when fake-claude is unauthenticated',
+  async () => {
+    const prevScenario = process.env.FAKE_CLAUDE_SCENARIO;
+    process.env.FAKE_CLAUDE_SCENARIO = 'auth-error';
+    try {
+      const err = await expectPreflightError(
+        () => authSmokeTest(fakeBin),
+        'claude-auth-failed',
+        'claude login',
+      );
+      if (!err.message.includes('Authentication required')) {
+        throw new Error(`expected stderr tail in message, got: ${err.message}`);
+      }
+    } finally {
+      if (prevScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+      else process.env.FAKE_CLAUDE_SCENARIO = prevScenario;
     }
-  } finally {
-    if (prevScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
-    else process.env.FAKE_CLAUDE_SCENARIO = prevScenario;
-  }
-});
+  },
+);
 
 await scenario('authSmokeTest: spawn-error path when binary is missing', async () => {
   await expectPreflightError(

@@ -175,16 +175,14 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
       const cur = state.live[event.col] ?? emptyLive();
       const last = cur.events[cur.events.length - 1];
       // Collapse consecutive partials of the same kind for rendering cheapness.
-      let events = cur.events;
-      if (last && last.kind === 'partial' && last.streamKind === event.kind) {
-        events = cur.events.slice(0, -1).concat({
-          kind: 'partial',
-          streamKind: event.kind,
-          chunk: last.chunk + event.chunk,
-        });
-      } else {
-        events = [...cur.events, { kind: 'partial', streamKind: event.kind, chunk: event.chunk }];
-      }
+      const events: LiveEvent[] =
+        last && last.kind === 'partial' && last.streamKind === event.kind
+          ? cur.events.slice(0, -1).concat({
+              kind: 'partial',
+              streamKind: event.kind,
+              chunk: last.chunk + event.chunk,
+            })
+          : [...cur.events, { kind: 'partial', streamKind: event.kind, chunk: event.chunk }];
       return {
         ...state,
         live: { ...state.live, [event.col]: { ...cur, events } },
@@ -318,7 +316,9 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
           ? {
               ...state.session,
               columns: state.session.columns.map((c) =>
-                c.id === event.col ? { ...c, currentRunFolder: event.runFolder ?? c.currentRunFolder } : c,
+                c.id === event.col
+                  ? { ...c, currentRunFolder: event.runFolder ?? c.currentRunFolder }
+                  : c,
               ),
             }
           : state.session,
@@ -360,6 +360,8 @@ export function App(): JSX.Element {
   }, [loadLocalVariants]);
 
   useEffect(() => {
+    // Fetch-on-mount: dispatched updates happen after async work, not synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadAll();
   }, [loadAll]);
 
@@ -498,30 +500,17 @@ export function App(): JSX.Element {
     <>
       <div className="topbar">
         <Hint content="MDredd on GitHub">
-          <a
-            className="brand"
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a className="brand" href={REPO_URL} target="_blank" rel="noopener noreferrer">
             MDredd
           </a>
         </Hint>
         <Hint content="Toggle write mode (applies to new runs; current runs keep their original mode)">
-          <button
-            className="chip"
-            aria-pressed={session.mode === 'write'}
-            onClick={onToggleMode}
-          >
+          <button className="chip" aria-pressed={session.mode === 'write'} onClick={onToggleMode}>
             Mode: {session.mode === 'write' ? 'Write' : 'Read-only'}
           </button>
         </Hint>
         <Hint content="Toggle judge (applies to new runs; current runs keep their original setting)">
-          <button
-            className="chip"
-            aria-pressed={session.judgeEnabled}
-            onClick={onToggleJudge}
-          >
+          <button className="chip" aria-pressed={session.judgeEnabled} onClick={onToggleJudge}>
             Judge {session.judgeEnabled ? 'ON' : 'OFF'}
           </button>
         </Hint>
@@ -529,7 +518,13 @@ export function App(): JSX.Element {
         <span style={{ color: 'var(--fg-dim)', fontFamily: 'var(--mono)', fontSize: 11 }}>
           {session.cwd}
         </span>
-        <Hint content={anyRunning ? 'Stop all running columns before starting new' : 'Wipe session and all runs'}>
+        <Hint
+          content={
+            anyRunning
+              ? 'Stop all running columns before starting new'
+              : 'Wipe session and all runs'
+          }
+        >
           <button
             className="chip"
             onClick={() => dispatch({ type: 'set-confirm-start-new', open: true })}
@@ -554,7 +549,7 @@ export function App(): JSX.Element {
             column={col}
             status={state.activeStatuses[col.id] ?? 'idle'}
             live={state.live[col.id] ?? emptyLive()}
-            runBundle={col.currentRunFolder ? state.runs[col.currentRunFolder] ?? null : null}
+            runBundle={col.currentRunFolder ? (state.runs[col.currentRunFolder] ?? null) : null}
             isJudging={state.judgingByColumn[col.id] ?? false}
             canRemove={session.columns.length > 1}
             mode={session.mode}
@@ -576,7 +571,10 @@ export function App(): JSX.Element {
       </div>
 
       {state.confirmStartNew && (
-        <div className="modal-backdrop" onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>
+        <div
+          className="modal-backdrop"
+          onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}
+        >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Start new?</h3>
             <p>
@@ -584,7 +582,9 @@ export function App(): JSX.Element {
               <code>~/.mdredd/</code>, except <code>.gitignore</code> and <code>.lock</code>.
             </p>
             <div className="actions">
-              <button onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>Cancel</button>
+              <button onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>
+                Cancel
+              </button>
               <button className="primary" onClick={onStartNewConfirm}>
                 Wipe and start new
               </button>

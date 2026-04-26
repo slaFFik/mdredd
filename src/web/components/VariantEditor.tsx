@@ -29,7 +29,11 @@ export function VariantEditor(props: {
             </button>
           </Hint>
           <Hint content="Pick a file from anywhere on your computer (outside this project) — e.g. a draft on your Desktop or a file from another repo.">
-            <button type="button" disabled={props.disabled} onClick={() => inputRef.current?.click()}>
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => inputRef.current?.click()}
+            >
               Upload…
             </button>
           </Hint>

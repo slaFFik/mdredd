@@ -7,9 +7,9 @@ import { atomicWriteJson, ensureDir, loadGitignore, pathExists } from './fsUtil.
 import { log } from './log.js';
 
 export interface SandboxInput {
-  cwd: string;                     // user's project cwd
-  storageRoot: string;             // ~/.mdredd in production; tests may pass a cwd-rooted path
-  runFolder: string;               // folder name only
+  cwd: string; // user's project cwd
+  storageRoot: string; // ~/.mdredd in production; tests may pass a cwd-rooted path
+  runFolder: string; // folder name only
   variantType: VariantType;
   skillOrAgentName: string | null; // required for skill/agent, ignored for CLAUDE.md
   variantContent: string;
@@ -17,11 +17,11 @@ export interface SandboxInput {
 }
 
 export interface SandboxResult {
-  runDir: string;                  // absolute
-  projectDir: string;              // absolute — child claude's cwd
-  outputsDir: string;              // absolute — model-produced files land here
-  settingsPath: string | null;     // path of written settings.json (write mode only)
-  mirroredTopLevel: string[];      // names of top-level entries that were mirrored
+  runDir: string; // absolute
+  projectDir: string; // absolute — child claude's cwd
+  outputsDir: string; // absolute — model-produced files land here
+  settingsPath: string | null; // path of written settings.json (write mode only)
+  mirroredTopLevel: string[]; // names of top-level entries that were mirrored
   skippedTopLevel: Array<{ name: string; reason: string }>;
 }
 
@@ -197,9 +197,8 @@ class Mirror {
     if (classified.isDir) {
       const subDest = join(dest, name);
       await ensureDir(subDest);
-      const nextAncestors = classified.realTarget !== null
-        ? [...ancestors, classified.realTarget]
-        : ancestors;
+      const nextAncestors =
+        classified.realTarget !== null ? [...ancestors, classified.realTarget] : ancestors;
       await this.walk(classified.realTarget ?? source, subDest, rel, chain, nextAncestors, false);
       this.recordMirror(isTopLevel, name);
     } else if (classified.isFile) {
