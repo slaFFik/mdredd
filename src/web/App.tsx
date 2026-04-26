@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react';
 import type { ServerSseEvent } from '@shared/schemas/events.js';
 import type { ColumnConfig, SessionFile } from '@shared/schemas/session.js';
 import type { ColumnStatus } from '@shared/schemas/types.js';

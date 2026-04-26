@@ -1,5 +1,5 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
-import type { ReactNode } from 'react';
+import type { JSX, ReactNode } from 'react';
 
 export function Hint(props: {
   content: ReactNode;

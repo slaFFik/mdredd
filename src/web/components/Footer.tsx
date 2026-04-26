@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { Hint } from './Hint.js';
 
 type ThemeMode = 'auto' | 'light' | 'dark';

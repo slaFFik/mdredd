@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { fsList, fsRead, type FsEntry } from '../lib/api.js';
 
 export function FilePickerModal(props: {

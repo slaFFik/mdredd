@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type JSX } from 'react';
 import type { ColumnConfig } from '@shared/schemas/session.js';
 import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';

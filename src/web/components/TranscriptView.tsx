@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type JSX } from 'react';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { ColumnLiveState } from '../App.js';

@@ -1,3 +1,5 @@
+import type { JSX } from 'react';
+
 export function PromptField(props: {
   value: string;
   disabled: boolean;

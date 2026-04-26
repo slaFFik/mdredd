@@ -1,5 +1,5 @@
 import type { JudgeFile } from '@shared/schemas/judge.js';
-import type { ReactNode } from 'react';
+import type { JSX, ReactNode } from 'react';
 import { Hint } from './Hint.js';
 
 function ScoreRow(props: { label: string; score: number; rationale?: string }): JSX.Element {

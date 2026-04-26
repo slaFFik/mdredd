@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type JSX } from 'react';
 import { FilePickerModal } from './FilePickerModal.js';
 import { Hint } from './Hint.js';
 
