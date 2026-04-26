@@ -1,6 +1,8 @@
 import { useRef, useState, type ChangeEvent, type JSX } from 'react';
 import { FilePickerModal } from './FilePickerModal.js';
 import { Hint } from './Hint.js';
+import { MarkdownToggle } from './MarkdownToggle.js';
+import { MarkdownView } from './MarkdownView.js';
 
 export function VariantEditor(props: {
   value: string;
@@ -9,6 +11,7 @@ export function VariantEditor(props: {
 }): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [rendered, setRendered] = useState(false);
 
   const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -17,6 +20,8 @@ export function VariantEditor(props: {
     props.onChange(text);
     if (inputRef.current) inputRef.current.value = '';
   };
+
+  const hasContent = props.value.trim().length > 0;
 
   return (
     <div className="variant-editor">
@@ -46,12 +51,21 @@ export function VariantEditor(props: {
           />
         </span>
       </div>
-      <textarea
-        placeholder="Paste variant content (CLAUDE.md, SKILL.md, or agent .md)"
-        value={props.value}
-        disabled={props.disabled}
-        onChange={(e) => props.onChange(e.target.value)}
-      />
+      <div className="md-host">
+        {rendered ? (
+          <MarkdownView content={props.value} className="variant-rendered" />
+        ) : (
+          <textarea
+            placeholder="Paste variant content (CLAUDE.md, SKILL.md, or agent .md)"
+            value={props.value}
+            disabled={props.disabled}
+            onChange={(e) => props.onChange(e.target.value)}
+          />
+        )}
+        {hasContent && (
+          <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />
+        )}
+      </div>
       <FilePickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}

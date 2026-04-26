@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { ColumnLiveState } from '../App.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
 import { formatElapsed, pluralizeToolCalls } from '../lib/format.js';
 import { Hint } from './Hint.js';
+import { MarkdownToggle } from './MarkdownToggle.js';
+import { MarkdownView } from './MarkdownView.js';
 
 export function TranscriptView(props: {
   live: ColumnLiveState;
@@ -17,6 +19,7 @@ export function TranscriptView(props: {
   isStreaming: boolean;
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
+  const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
     if (!props.isStreaming) return;
@@ -54,33 +57,49 @@ export function TranscriptView(props: {
 
   if (!hasLive && !props.runBundle?.transcript) {
     return (
-      <div className="transcript">
-        <div className="empty-hint">No transcript yet.</div>
+      <div className="md-host transcript-host">
+        <div className="transcript">
+          <div className="empty-hint">No transcript yet.</div>
+        </div>
       </div>
     );
   }
 
+  const toggle = <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />;
+
   // Render live events during streaming; transcript events from disk once terminal.
   if (props.isStreaming || hasLive) {
     return (
-      <div className="transcript" ref={ref}>
-        {props.live.events.map((e, i) => (
-          <RenderLive key={i} event={e} toolsInTurn={liveToolsByEventIdx[i] ?? 0} />
-        ))}
+      <div className="md-host transcript-host">
+        <div className="transcript" ref={ref}>
+          {props.live.events.map((e, i) => (
+            <RenderLive
+              key={i}
+              event={e}
+              toolsInTurn={liveToolsByEventIdx[i] ?? 0}
+              rendered={rendered}
+            />
+          ))}
+        </div>
+        {toggle}
       </div>
     );
   }
 
   return (
-    <div className="transcript" ref={ref}>
-      {transcriptEvents.map((e, i) => (
-        <RenderNormalized
-          key={i}
-          event={e}
-          startedAtMs={transcriptStartedMs}
-          toolsInTurn={transcriptToolsByEventIdx[i] ?? 0}
-        />
-      ))}
+    <div className="md-host transcript-host">
+      <div className="transcript" ref={ref}>
+        {transcriptEvents.map((e, i) => (
+          <RenderNormalized
+            key={i}
+            event={e}
+            startedAtMs={transcriptStartedMs}
+            toolsInTurn={transcriptToolsByEventIdx[i] ?? 0}
+            rendered={rendered}
+          />
+        ))}
+      </div>
+      {toggle}
     </div>
   );
 }
@@ -163,11 +182,16 @@ function computeNormalizedTurnTools(events: NormalizedEvent[]): number[] {
 function RenderLive(props: {
   event: ColumnLiveState['events'][number];
   toolsInTurn: number;
+  rendered: boolean;
 }): JSX.Element {
   const e = props.event;
   switch (e.kind) {
     case 'partial':
-      return <div className={`event ${e.streamKind}`}>{e.chunk}</div>;
+      return props.rendered ? (
+        <MarkdownView content={e.chunk} className={`event ${e.streamKind}`} />
+      ) : (
+        <div className={`event ${e.streamKind}`}>{e.chunk}</div>
+      );
     case 'tool-use':
       return (
         <div className="event tool-use">
@@ -207,6 +231,7 @@ function RenderNormalized(props: {
   event: NormalizedEvent;
   startedAtMs: number;
   toolsInTurn: number;
+  rendered: boolean;
 }): JSX.Element {
   const e = props.event;
   switch (e.t) {
@@ -227,7 +252,11 @@ function RenderNormalized(props: {
       );
     }
     case 'partial':
-      return <div className={`event ${e.kind}`}>{e.chunk}</div>;
+      return props.rendered ? (
+        <MarkdownView content={e.chunk} className={`event ${e.kind}`} />
+      ) : (
+        <div className={`event ${e.kind}`}>{e.chunk}</div>
+      );
     case 'message':
       return (
         <div className="event text">

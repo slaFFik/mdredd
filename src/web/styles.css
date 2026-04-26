@@ -29,6 +29,16 @@
   --badge-cancelled-bg: rgba(90, 98, 114, 0.1);
   --badge-idle-bg: rgba(90, 98, 114, 0.08);
   --err-banner-bg: rgba(181, 61, 49, 0.08);
+
+  /* syntax highlighting (highlight.js token palette) */
+  --syn-keyword: #d73a49;
+  --syn-string: #032f62;
+  --syn-comment: #6a737d;
+  --syn-number: #005cc5;
+  --syn-fn: #6f42c1;
+  --syn-tag: #22863a;
+  --syn-builtin: #005cc5;
+  --syn-meta: #6a737d;
 }
 
 /* System prefers dark — apply unless user forced light. */
@@ -55,6 +65,15 @@
     --badge-cancelled-bg: rgba(154, 160, 172, 0.12);
     --badge-idle-bg: rgba(154, 160, 172, 0.1);
     --err-banner-bg: rgba(230, 124, 124, 0.12);
+
+    --syn-keyword: #c586c0;
+    --syn-string: #ce9178;
+    --syn-comment: #6a9955;
+    --syn-number: #b5cea8;
+    --syn-fn: #dcdcaa;
+    --syn-tag: #569cd6;
+    --syn-builtin: #4ec9b0;
+    --syn-meta: #d4d4d4;
   }
 }
 
@@ -81,6 +100,15 @@
   --badge-cancelled-bg: rgba(154, 160, 172, 0.12);
   --badge-idle-bg: rgba(154, 160, 172, 0.1);
   --err-banner-bg: rgba(230, 124, 124, 0.12);
+
+  --syn-keyword: #c586c0;
+  --syn-string: #ce9178;
+  --syn-comment: #6a9955;
+  --syn-number: #b5cea8;
+  --syn-fn: #dcdcaa;
+  --syn-tag: #569cd6;
+  --syn-builtin: #4ec9b0;
+  --syn-meta: #d4d4d4;
 }
 
 /* ------- layout ------- */
@@ -207,6 +235,23 @@ body {
 .prompt-field textarea {
   min-height: 60px;
 }
+.variant-editor .md-host {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.variant-editor .md-host textarea {
+  display: block;
+}
+.variant-editor .variant-rendered {
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: var(--bg);
+  overflow: auto;
+  max-height: 400px;
+}
 .variant-editor .row,
 .prompt-field .row {
   display: flex;
@@ -273,6 +318,16 @@ body {
   cursor: help;
 }
 
+.transcript-host {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.transcript-host .transcript {
+  flex: 1;
+}
 .transcript {
   flex: 1;
   padding: 10px 12px;
@@ -650,4 +705,235 @@ body {
 }
 .theme-toggle svg {
   display: block;
+}
+
+/* ------- markdown toggle + rendered view ------- */
+
+.md-toggle {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elev-2);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.md-host:hover .md-toggle,
+.md-toggle.rendered,
+.md-toggle:focus-visible {
+  opacity: 1;
+}
+.md-toggle:hover {
+  color: var(--fg);
+  background: var(--bg-elev);
+}
+.md-toggle svg {
+  display: block;
+}
+
+.markdown-view {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--fg);
+  white-space: normal;
+  word-wrap: break-word;
+}
+.markdown-view > :first-child {
+  margin-top: 0;
+}
+.markdown-view > :last-child {
+  margin-bottom: 0;
+}
+.markdown-view h1,
+.markdown-view h2,
+.markdown-view h3,
+.markdown-view h4,
+.markdown-view h5,
+.markdown-view h6 {
+  margin: 0.8em 0 0.4em 0;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.markdown-view h1 {
+  font-size: 1.45em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2em;
+}
+.markdown-view h2 {
+  font-size: 1.25em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.15em;
+}
+.markdown-view h3 {
+  font-size: 1.1em;
+}
+.markdown-view h4 {
+  font-size: 1em;
+}
+.markdown-view h5,
+.markdown-view h6 {
+  font-size: 0.95em;
+  color: var(--fg-dim);
+}
+.markdown-view p {
+  margin: 0.4em 0;
+}
+.markdown-view a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.markdown-view code {
+  font-family: var(--mono);
+  background: var(--bg-elev-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+.markdown-view pre {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow: auto;
+  margin: 0.5em 0;
+}
+.markdown-view pre code {
+  background: none;
+  padding: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.markdown-view ul,
+.markdown-view ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+.markdown-view li {
+  margin: 0.15em 0;
+}
+.markdown-view li > p {
+  margin: 0.15em 0;
+}
+.markdown-view blockquote {
+  margin: 0.5em 0;
+  padding: 0.1em 0.9em;
+  border-left: 3px solid var(--border);
+  color: var(--fg-dim);
+}
+.markdown-view table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.95em;
+}
+.markdown-view th,
+.markdown-view td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.markdown-view th {
+  background: var(--bg-elev-2);
+  font-weight: 600;
+}
+.markdown-view hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+.markdown-view img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Inside the transcript, partial events rendered as markdown should keep the
+   same vertical rhythm as raw partials and inherit thinking-style coloring. */
+.transcript .markdown-view.event {
+  margin-bottom: 6px;
+}
+.transcript .markdown-view.thinking {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+/* highlight.js token colors — themed via --syn-* vars (light/dark) */
+.markdown-view .hljs {
+  color: var(--fg);
+  background: transparent;
+}
+.markdown-view .hljs-comment,
+.markdown-view .hljs-quote,
+.markdown-view .hljs-doctag {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.markdown-view .hljs-keyword,
+.markdown-view .hljs-literal,
+.markdown-view .hljs-selector-tag,
+.markdown-view .hljs-name {
+  color: var(--syn-keyword);
+}
+.markdown-view .hljs-string,
+.markdown-view .hljs-regexp,
+.markdown-view .hljs-meta-string,
+.markdown-view .hljs-template-tag,
+.markdown-view .hljs-template-variable {
+  color: var(--syn-string);
+}
+.markdown-view .hljs-number,
+.markdown-view .hljs-symbol,
+.markdown-view .hljs-bullet {
+  color: var(--syn-number);
+}
+.markdown-view .hljs-title,
+.markdown-view .hljs-title.function_,
+.markdown-view .hljs-section,
+.markdown-view .hljs-attr,
+.markdown-view .hljs-selector-id,
+.markdown-view .hljs-selector-class,
+.markdown-view .hljs-selector-attr,
+.markdown-view .hljs-selector-pseudo {
+  color: var(--syn-fn);
+}
+.markdown-view .hljs-built_in,
+.markdown-view .hljs-type,
+.markdown-view .hljs-class .hljs-title,
+.markdown-view .hljs-attribute {
+  color: var(--syn-builtin);
+}
+.markdown-view .hljs-tag {
+  color: var(--syn-tag);
+}
+.markdown-view .hljs-meta,
+.markdown-view .hljs-meta-keyword {
+  color: var(--syn-meta);
+}
+.markdown-view .hljs-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.markdown-view .hljs-emphasis {
+  font-style: italic;
+}
+.markdown-view .hljs-strong {
+  font-weight: 600;
+}
+.markdown-view .hljs-deletion {
+  color: var(--err);
+  background: var(--badge-errored-bg);
+}
+.markdown-view .hljs-addition {
+  color: var(--ok);
+  background: var(--badge-completed-bg);
 }
