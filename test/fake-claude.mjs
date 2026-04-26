@@ -59,6 +59,15 @@ const jsonSchemaRaw = findFlagValue('--json-schema');
 const outputFormat = findFlagValue('--output-format') ?? 'stream-json';
 const model = findFlagValue('--model') ?? 'haiku';
 
+// `auth-error` simulates an unauthenticated CLI and must take precedence over
+// the --json-schema bypass below; preflight's auth smoke test exercises that
+// path with --output-format json + --json-schema, so the bypass alone would
+// hide the failure mode we need to test.
+if (scenario === 'auth-error') {
+  stderr.write('Authentication required. Run `claude login` to authenticate.\n');
+  exit(1);
+}
+
 // When the caller asks for --output-format json with a --json-schema, bypass scenarios
 // and emit a best-effort conforming response. Used by the judge subprocess.
 if (outputFormat === 'json' && jsonSchemaRaw) {
