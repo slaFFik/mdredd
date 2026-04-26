@@ -30,7 +30,7 @@ export const RunConfigSchema = z.object({
   // `model` above is what the user selected (often an alias like `haiku`);
   // this captures what actually ran, so reruns across an alias bump remain
   // comparable. Optional/nullable for back-compat with pre-existing configs.
-  resolvedModel: z.string().nullable().optional(),
+  resolvedModel: ModelIdSchema.nullable().optional(),
   mode: ModeSchema,
   status: RunStatusSchema,
   startedAt: z.string(),
