@@ -21,12 +21,19 @@ export const NormalizedEventSchema = z.discriminatedUnion('t', [
   }),
   z.object({
     t: z.literal('toolUse'),
+    // Anthropic stream tool_use_id (present from real claude and fake-claude;
+    // optional for forward-compat with older transcripts written before this
+    // field existed).
+    id: z.string().optional(),
     tool: z.string(),
     argsSummary: z.string(),
     ts: z.number().int().nonnegative(),
   }),
   z.object({
     t: z.literal('toolResult'),
+    // Matches the corresponding toolUse.id; pair by id rather than by parser
+    // state so parallel tool calls don't get scrambled.
+    id: z.string().optional(),
     tool: z.string(),
     resultSummary: z.string(),
     isError: z.boolean().optional(),

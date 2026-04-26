@@ -183,7 +183,7 @@ function sanitizeLabel(s: string): string {
   return s.replace(/[\r\n]/g, ' ').slice(0, 100);
 }
 
-export function detectCanaryLeak(raw: string, canary: string): boolean {
+function detectCanaryLeak(raw: string, canary: string): boolean {
   return raw.includes(canary);
 }
 
@@ -232,22 +232,53 @@ export function extractFinalAssistantMessage(transcript: TranscriptFile): string
   return segments.length === 0 ? '(no final message emitted)' : segments.join('\n\n');
 }
 
-function extractToolSummary(transcript: TranscriptFile): string[] {
+interface PendingToolUse {
+  tool: string;
+  argsSummary: string;
+  id?: string;
+}
+
+export function extractToolSummary(transcript: TranscriptFile): string[] {
   const out: string[] = [];
-  let pendingTool: { tool: string; argsSummary: string } | null = null;
+  // Primary pairing: by tool_use_id. Real-claude and fake-claude both emit ids,
+  // so this is the path that actually runs in production.
+  const byId = new Map<string, PendingToolUse>();
+  // Fallback FIFO queue for legacy transcripts written before ids were threaded
+  // through the parser. Pairing oldest-unmatched is closer to truth than the
+  // previous "always pair with the most recent" strategy that mis-attributed
+  // results across parallel tool calls (issue #5).
+  const fifo: PendingToolUse[] = [];
+
   for (const e of transcript.events) {
     if (e.t === 'toolUse') {
-      pendingTool = { tool: e.tool, argsSummary: e.argsSummary };
+      const entry: PendingToolUse = { tool: e.tool, argsSummary: e.argsSummary, id: e.id };
+      if (e.id) byId.set(e.id, entry);
+      fifo.push(entry);
     } else if (e.t === 'toolResult') {
-      const tool = pendingTool?.tool ?? e.tool;
-      const args = pendingTool?.argsSummary ?? '';
+      let pair: PendingToolUse | undefined;
+      if (e.id && byId.has(e.id)) {
+        pair = byId.get(e.id);
+        byId.delete(e.id);
+        const idx = fifo.indexOf(pair!);
+        if (idx >= 0) fifo.splice(idx, 1);
+      } else if (fifo.length > 0) {
+        pair = fifo.shift();
+        if (pair?.id) byId.delete(pair.id);
+      }
+      const tool = pair?.tool ?? e.tool;
+      const args = pair?.argsSummary ?? '';
       const res = truncate(e.resultSummary, JUDGE_TOOL_SUMMARY_CAP_CHARS);
-      out.push(`${tool}(${truncate(args, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → ${res}${e.isError ? ' [error]' : ''}`);
-      pendingTool = null;
+      out.push(
+        `${tool}(${truncate(args, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → ${res}${e.isError ? ' [error]' : ''}`,
+      );
     }
   }
-  // Unmatched pending tool (no result captured): still emit.
-  if (pendingTool) out.push(`${pendingTool.tool}(${truncate(pendingTool.argsSummary, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → (no result observed)`);
+  // Unmatched tool uses (no result captured): emit so the judge sees the gap.
+  for (const t of fifo) {
+    out.push(
+      `${t.tool}(${truncate(t.argsSummary, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → (no result observed)`,
+    );
+  }
   return out;
 }
 

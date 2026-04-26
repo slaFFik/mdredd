@@ -40,8 +40,14 @@ export class ClaudeStreamParser extends EventEmitter {
   private currentMessageRole: string | null = null;
   private currentStopReason: string | null = null;
   private currentToolName: string | null = null;
+  private currentToolUseId: string | null = null;
   private currentToolInputBuffer = '';
   private currentContentBlockKind: 'text' | 'thinking' | 'tool_use' | null = null;
+  // tool_use_id → tool name, populated when each tool_use block opens.
+  // tool_result events arrive in a later (user) message and may be reordered
+  // relative to their tool_use blocks; pair them by id rather than by which
+  // tool_use happened to be most recent. Issue #5.
+  private toolUseIdToName = new Map<string, string>();
   private seenNovelTypes = new Set<string>();
 
   override on<E extends keyof ClaudeStreamParserEvents>(event: E, listener: Listener<E>): this {
@@ -147,7 +153,12 @@ export class ClaudeStreamParser extends EventEmitter {
         }
         if (kind === 'tool_use') {
           this.currentToolName = (block?.name as string | undefined) ?? 'unknown';
+          this.currentToolUseId =
+            typeof block?.id === 'string' && block.id.length > 0 ? block.id : null;
           this.currentToolInputBuffer = '';
+          if (this.currentToolUseId) {
+            this.toolUseIdToName.set(this.currentToolUseId, this.currentToolName);
+          }
         }
         return;
       }
@@ -172,12 +183,14 @@ export class ClaudeStreamParser extends EventEmitter {
           const argsSummary = truncate(this.currentToolInputBuffer, 160);
           this.emitNormalized({
             t: 'toolUse',
+            ...(this.currentToolUseId ? { id: this.currentToolUseId } : {}),
             tool: this.currentToolName,
             argsSummary,
             ts: Date.now(),
           });
         }
         this.currentContentBlockKind = null;
+        this.currentToolUseId = null;
         return;
       }
       case 'message_delta': {
@@ -226,11 +239,20 @@ export class ClaudeStreamParser extends EventEmitter {
         if (!item || typeof item !== 'object') continue;
         const obj = item as Record<string, unknown>;
         if (obj.type === 'tool_result') {
-          const tool = this.currentToolName ?? 'unknown';
+          const id =
+            typeof obj.tool_use_id === 'string' && obj.tool_use_id.length > 0
+              ? obj.tool_use_id
+              : undefined;
+          // Pair by id when present; fall back to the most recent tool_use only
+          // when the result lacks an id (defensive — real claude always sends one).
+          const tool =
+            (id && this.toolUseIdToName.get(id)) ?? this.currentToolName ?? 'unknown';
+          if (id) this.toolUseIdToName.delete(id);
           const rawResult = obj.content;
           const resultSummary = truncate(stringifyResult(rawResult), 200);
           this.emitNormalized({
             t: 'toolResult',
+            ...(id ? { id } : {}),
             tool,
             resultSummary,
             isError: Boolean(obj.is_error),
