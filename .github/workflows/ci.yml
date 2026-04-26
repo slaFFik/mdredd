@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 5
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
           # ESLint v10 requires ^20.19.0 || ^22.13.0 || >=24, so pick a Node
@@ -67,7 +67,7 @@ jobs:
       matrix:
         node-version: ['20.19.x', '22.12.x']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
           node-version: ${{ matrix.node-version }}
@@ -83,7 +83,7 @@ jobs:
       matrix:
         node-version: ['20.19.x', '22.12.x']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
           node-version: ${{ matrix.node-version }}
@@ -99,7 +99,7 @@ jobs:
       matrix:
         node-version: ['20.19.x', '22.12.x']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
           node-version: ${{ matrix.node-version }}
