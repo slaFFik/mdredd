@@ -33,7 +33,7 @@ MDredd runs two or three versions of the same instruction file in parallel — e
 ## Requirements
 
 - [Claude Code](https://www.anthropic.com/claude-code) installed and authenticated (`claude` available in your shell)
-- Node.js
+- Node.js 22.13+
 - macOS or Linux
 
 You don't need an API key — MDredd piggybacks on your existing Claude Code auth.
@@ -41,12 +41,10 @@ You don't need an API key — MDredd piggybacks on your existing Claude Code aut
 ## Install
 
 ```bash
-npm install
-npm run build
-npm link          # exposes `mdredd` on your PATH
+npm install -g mdredd
 ```
 
-After pulling source changes, re-run `npm run build` — the `mdredd` binary loads from `dist/`, not from source, so changes to `src/` won't take effect until the next build.
+Once installed, run `mdredd` from any project directory. To update later, re-run the same command.
 
 ## How isolation works
 
@@ -98,7 +96,3 @@ Two artifacts make this auditable:
 
 - A baseline ~5–10k cache-creation tokens still come from Claude Code's own system prompt, tool schemas, and your user-global config (`~/.claude/CLAUDE.md`, user-level skills). That overhead is the same for every variant in a session, so it cancels out in A/B comparisons — but it's not zero.
 - Symlinks mean `realpath()` of any file inside the sandbox resolves outside it. If a future Claude Code version starts using `realpath` for project resolution instead of `.git` walking, the planted `.git/` won't catch that path. Watch `init.json`'s `memory_paths.auto` after Claude Code updates.
-
-## Status
-
-Early development.
