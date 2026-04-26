@@ -2,6 +2,8 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Runner } from '../src/server/runner.js';
+import { RunManager } from '../src/server/runManager.js';
+import { SessionStore } from '../src/server/session.js';
 import { buildSandbox } from '../src/server/sandbox.js';
 import type { RunConfig } from '@shared/schemas/run.js';
 
@@ -540,6 +542,62 @@ await scenario('init context safe: no warn when auto-memory is inside the run di
       cap.restore();
     }
   });
+});
+
+await scenario('runManager.stopAll: terminates active runners and persists cancelled transcripts', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-stopall-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+  const savedDelay = process.env.FAKE_CLAUDE_DELAY_MS;
+  // Long-running fake; SIGTERM during the initial sleep cancels mid-stream so
+  // the runner has to follow the cancelled finalize path (issue #6 main risk).
+  process.env.FAKE_CLAUDE_SCENARIO = 'long';
+  process.env.FAKE_CLAUDE_DELAY_MS = '5000';
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    await session.mutate((s) => {
+      for (const [i, col] of s.columns.entries()) {
+        col.variantName = `stopall-var-${i}`; // explicit name skips the haiku slug spawn
+        col.variantContent = `# variant ${i}\n`;
+        col.prompt = `do thing ${i}`;
+      }
+    });
+    const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+    await runManager.init();
+
+    const cfg1 = await runManager.startColumn('col-1');
+    const cfg2 = await runManager.startColumn('col-2');
+    if (runManager.activeCount() !== 2) {
+      throw new Error(`expected 2 active runners, got ${runManager.activeCount()}`);
+    }
+
+    const result = await runManager.stopAll(5_000);
+    if (result.timedOut) throw new Error('stopAll should not have timed out');
+    if (result.stopped !== 2) throw new Error(`expected stopped=2, got ${result.stopped}`);
+    if (runManager.activeCount() !== 0) {
+      throw new Error(`expected 0 active after stopAll, got ${runManager.activeCount()}`);
+    }
+
+    for (const cfg of [cfg1, cfg2]) {
+      const txRaw = await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8');
+      const tx = JSON.parse(txRaw) as { status: string };
+      if (tx.status !== 'cancelled') {
+        throw new Error(`transcript ${cfg.runFolder}: expected cancelled, got ${tx.status}`);
+      }
+    }
+
+    // Idempotent: a second stopAll on a drained manager is a no-op.
+    const second = await runManager.stopAll(1_000);
+    if (second.stopped !== 0 || second.timedOut) {
+      throw new Error(`second stopAll mismatch: ${JSON.stringify(second)}`);
+    }
+  } finally {
+    if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+    else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+    if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
+    else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 console.log('\nAll runner smoke scenarios passed.');
