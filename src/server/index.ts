@@ -59,16 +59,36 @@ async function main(): Promise<void> {
       });
     });
 
-    server.listen(port, '127.0.0.1', async () => {
-      await writeLockMeta(preflight.lockFilePath, process.pid, port);
-      const url = `${auth.origin}/?t=${auth.token}`;
-      log.info('server.listening', { url, pid: process.pid });
-      console.log(`mdredd listening at ${url}`);
-      if (shouldOpen) {
-        open(url).catch((err) => {
-          console.log(`(could not open browser automatically: ${err.message})`);
+    // Bind failures (EADDRINUSE/EACCES) surface via the 'error' event, not
+    // the listen callback. Without this handler Node would emit an unhandled
+    // 'error' and exit while still holding the proper-lockfile lock,
+    // blocking restarts until the stale window expires.
+    server.once('error', (err) => {
+      console.error(`mdredd: failed to bind ${port}: ${err.message}`);
+      log.error('server.listen-error', { port, error: err.message });
+      void preflight.releaseLock().finally(() => process.exit(1));
+    });
+
+    server.listen(port, '127.0.0.1', () => {
+      // Keep this callback synchronous so a writeLockMeta rejection cannot
+      // escape as an unhandled promise rejection. On failure release the
+      // lock (we just acquired it but never wrote the sidecar) and exit.
+      writeLockMeta(preflight.lockFilePath, process.pid, port)
+        .then(() => {
+          const url = `${auth.origin}/?t=${auth.token}`;
+          log.info('server.listening', { url, pid: process.pid });
+          console.log(`mdredd listening at ${url}`);
+          if (shouldOpen) {
+            open(url).catch((err) => {
+              console.log(`(could not open browser automatically: ${err.message})`);
+            });
+          }
+        })
+        .catch((err) => {
+          console.error(`mdredd: could not write lock metadata: ${(err as Error).message}`);
+          log.error('server.lock-meta-failed', { error: (err as Error).message });
+          void preflight.releaseLock().finally(() => process.exit(1));
         });
-      }
     });
 
     // 5s for runners to drain (each runner self-bounds at SIGTERM+2s SIGKILL),
