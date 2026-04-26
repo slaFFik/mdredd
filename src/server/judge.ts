@@ -30,10 +30,31 @@ export interface JudgeInput {
   outputs: OutputFile[];
 }
 
-export async function runJudge(input: JudgeInput): Promise<JudgeFile> {
-  const { prompt: inputSummary, canary } = buildJudgePrompt(input);
+export class JudgeTimeoutError extends Error {
+  readonly isJudgeTimeout = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'JudgeTimeoutError';
+  }
+}
+
+export const JUDGE_SUBPROCESS_TIMEOUT_MS = 120_000;
+
+export type SpawnJudgeFn = (
+  claudeBin: string,
+  prompt: string,
+  opts: SpawnJudgeOptions,
+) => Promise<string>;
+
+export interface RunJudgeOptions {
+  // Test-only: override the subprocess spawn so the retry/timeout paths can
+  // be exercised without launching real Haiku.
+  spawnFn?: SpawnJudgeFn;
+}
+
+export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): Promise<JudgeFile> {
   try {
-    const parsed = await invokeJudge(input.claudeBin, inputSummary, canary, input.runDir);
+    const parsed = await invokeJudge(input, opts.spawnFn);
     const file: JudgeFile = {
       runFolder: input.runConfig.runFolder,
       createdAt: new Date().toISOString(),
@@ -96,8 +117,23 @@ export interface JudgePromptArtifacts {
   canary: string;
 }
 
-export function buildJudgePrompt(input: JudgeInput): JudgePromptArtifacts {
+export interface BuildJudgePromptOptions {
+  // Multiplies every byte/char cap on untrusted sections. Used on timeout retry
+  // (e.g. 0.5) to shrink the prompt so the second judge call has less to chew on.
+  bytesCapMultiplier?: number;
+}
+
+export function buildJudgePrompt(
+  input: JudgeInput,
+  opts: BuildJudgePromptOptions = {},
+): JudgePromptArtifacts {
   const { runConfig, transcript, variantContent, outputs } = input;
+  const m = opts.bytesCapMultiplier ?? 1;
+  // Floors keep retries useful even if a future caller passes a very small multiplier.
+  const promptCap = Math.max(256, Math.floor(JUDGE_PROMPT_CAP_BYTES * m));
+  const variantCap = Math.max(512, Math.floor(JUDGE_VARIANT_CAP_BYTES * m));
+  const finalMessageCap = Math.max(256, Math.floor(JUDGE_FINAL_MESSAGE_CAP_BYTES * m));
+  const toolSummaryCap = Math.max(80, Math.floor(JUDGE_TOOL_SUMMARY_CAP_CHARS * m));
   // 64 bits of entropy each: too large to brute-force a guess from inside the
   // sandboxed variant, so the data fences and canary cannot be forged.
   const nonce = randomBytes(8).toString('hex');
@@ -136,22 +172,22 @@ export function buildJudgePrompt(input: JudgeInput): JudgePromptArtifacts {
   lines.push('');
 
   lines.push('## Prompt given to the variant');
-  lines.push(fence('prompt', bytesCap(runConfig.prompt, JUDGE_PROMPT_CAP_BYTES)));
+  lines.push(fence('prompt', bytesCap(runConfig.prompt, promptCap)));
   lines.push('');
 
   const variantLabel =
     `variant ${runConfig.variantType}` +
     (runConfig.skillOrAgentName ? ` ${runConfig.skillOrAgentName}` : '');
   lines.push('## Variant body');
-  lines.push(fence(variantLabel, bytesCap(variantContent, JUDGE_VARIANT_CAP_BYTES)));
+  lines.push(fence(variantLabel, bytesCap(variantContent, variantCap)));
   lines.push('');
 
   const finalMessage = extractFinalAssistantMessage(transcript);
   lines.push('## Final assistant message');
-  lines.push(fence('assistant message', midEllipsis(finalMessage, JUDGE_FINAL_MESSAGE_CAP_BYTES)));
+  lines.push(fence('assistant message', midEllipsis(finalMessage, finalMessageCap)));
   lines.push('');
 
-  const tools = extractToolSummary(transcript);
+  const tools = extractToolSummary(transcript, toolSummaryCap);
   lines.push('## Tool calls (summary)');
   lines.push(fence('tool summary', tools.length === 0 ? '(none)' : tools.join('\n')));
   lines.push('');
@@ -240,7 +276,10 @@ interface PendingToolUse {
   id?: string;
 }
 
-export function extractToolSummary(transcript: TranscriptFile): string[] {
+export function extractToolSummary(
+  transcript: TranscriptFile,
+  toolSummaryCap: number = JUDGE_TOOL_SUMMARY_CAP_CHARS,
+): string[] {
   const out: string[] = [];
   // Primary pairing: by tool_use_id. Real-claude and fake-claude both emit ids,
   // so this is the path that actually runs in production.
@@ -269,17 +308,13 @@ export function extractToolSummary(transcript: TranscriptFile): string[] {
       }
       const tool = pair?.tool ?? e.tool;
       const args = pair?.argsSummary ?? '';
-      const res = truncate(e.resultSummary, JUDGE_TOOL_SUMMARY_CAP_CHARS);
-      out.push(
-        `${tool}(${truncate(args, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → ${res}${e.isError ? ' [error]' : ''}`,
-      );
+      const res = truncate(e.resultSummary, toolSummaryCap);
+      out.push(`${tool}(${truncate(args, toolSummaryCap)}) → ${res}${e.isError ? ' [error]' : ''}`);
     }
   }
   // Unmatched tool uses (no result captured): emit so the judge sees the gap.
   for (const t of fifo) {
-    out.push(
-      `${t.tool}(${truncate(t.argsSummary, JUDGE_TOOL_SUMMARY_CAP_CHARS)}) → (no result observed)`,
-    );
+    out.push(`${t.tool}(${truncate(t.argsSummary, toolSummaryCap)}) → (no result observed)`);
   }
   return out;
 }
@@ -304,42 +339,87 @@ function truncate(s: string, cap: number): string {
   return s.slice(0, cap - 1) + '…';
 }
 
-async function invokeJudge(
+type AttemptResult =
+  | { ok: true; value: JudgeModelOutput }
+  | { ok: false; kind: 'parse'; error: string }
+  | { ok: false; kind: 'timeout'; error: string };
+
+async function attemptJudge(
+  spawnFn: SpawnJudgeFn,
   claudeBin: string,
   prompt: string,
   canary: string,
   runDir: string,
+  label: string,
+): Promise<AttemptResult> {
+  let raw: string;
+  try {
+    raw = await spawnFn(claudeBin, prompt, { jsonSchema: true });
+  } catch (err) {
+    if (err instanceof JudgeTimeoutError) {
+      log.warn('judge.attempt-timeout', { attempt: label, error: err.message });
+      return { ok: false, kind: 'timeout', error: err.message };
+    }
+    throw err;
+  }
+  await writeRawResponse(runDir, label, raw);
+  if (detectCanaryLeak(raw, canary)) {
+    log.warn('judge.canary-leak', { attempt: label });
+    throw new Error(
+      `judge output contained the canary token on ${label} attempt, indicating prompt injection from variant or transcript content; scores discarded`,
+    );
+  }
+  const parsed = tryParseJudgeOutput(raw);
+  if (parsed.ok) return { ok: true, value: parsed.value };
+  return { ok: false, kind: 'parse', error: parsed.error };
+}
+
+export async function invokeJudge(
+  input: JudgeInput,
+  spawnFn: SpawnJudgeFn = spawnJudge,
 ): Promise<JudgeModelOutput> {
-  const firstAttempt = await spawnJudge(claudeBin, prompt, { jsonSchema: true });
-  await writeRawResponse(runDir, 'first', firstAttempt);
-  if (detectCanaryLeak(firstAttempt, canary)) {
-    log.warn('judge.canary-leak', { attempt: 'first' });
+  const { claudeBin, runDir } = input;
+  const built = buildJudgePrompt(input);
+
+  const first = await attemptJudge(spawnFn, claudeBin, built.prompt, built.canary, runDir, 'first');
+  if (first.ok) return first.value;
+
+  // Build the retry prompt. A timeout is treated like a schema failure for retry
+  // purposes (issue #12), but the retry shrinks the input to give Haiku a real
+  // chance to finish in the next 120s window. Schema-failure retries keep the
+  // original prompt and append a hint about the parse error.
+  let retryPrompt: string;
+  let retryCanary: string;
+  if (first.kind === 'timeout') {
+    log.warn('judge.first-attempt-invalid', {
+      reason: 'timeout',
+      error: first.error,
+      retryStrategy: 'halve-input-caps',
+    });
+    const rebuilt = buildJudgePrompt(input, { bytesCapMultiplier: 0.5 });
+    retryPrompt = rebuilt.prompt;
+    retryCanary = rebuilt.canary;
+  } else {
+    log.warn('judge.first-attempt-invalid', { reason: 'parse', error: first.error });
+    retryPrompt =
+      `${built.prompt}\n\n# Retry required\n` +
+      `Your previous response did not match the required shape. Parser said: "${first.error}"\n` +
+      `Emit ONLY the JSON object described above — no markdown, no prose, no code fences. ` +
+      `The first character MUST be "{" and the last MUST be "}". Include all four score keys (accuracy, completeness, adherence, clarity) and the rationale field.`;
+    retryCanary = built.canary;
+  }
+
+  const second = await attemptJudge(spawnFn, claudeBin, retryPrompt, retryCanary, runDir, 'retry');
+  if (second.ok) return second.value;
+
+  if (second.kind === 'timeout') {
     throw new Error(
-      'judge output contained the canary token, indicating prompt injection from variant or transcript content; scores discarded',
+      `judge timed out on retry after ${first.kind === 'timeout' ? 'an initial timeout' : 'a schema failure'}. ` +
+        `Raw responses (if any) saved to ${join(runDir, 'judge.raw-response.log')}.`,
     );
   }
-  const firstParsed = tryParseJudgeOutput(firstAttempt);
-  if (firstParsed.ok) return firstParsed.value;
-
-  log.warn('judge.first-attempt-invalid', { error: firstParsed.error });
-  const retryPrompt =
-    `${prompt}\n\n# Retry required\n` +
-    `Your previous response did not match the required shape. Parser said: "${firstParsed.error}"\n` +
-    `Emit ONLY the JSON object described above — no markdown, no prose, no code fences. ` +
-    `The first character MUST be "{" and the last MUST be "}". Include all four score keys (accuracy, completeness, adherence, clarity) and the rationale field.`;
-  const secondAttempt = await spawnJudge(claudeBin, retryPrompt, { jsonSchema: true });
-  await writeRawResponse(runDir, 'retry', secondAttempt);
-  if (detectCanaryLeak(secondAttempt, canary)) {
-    log.warn('judge.canary-leak', { attempt: 'retry' });
-    throw new Error(
-      'judge output contained the canary token on retry, indicating prompt injection from variant or transcript content; scores discarded',
-    );
-  }
-  const secondParsed = tryParseJudgeOutput(secondAttempt);
-  if (secondParsed.ok) return secondParsed.value;
-
   throw new Error(
-    `judge output invalid after retry: ${secondParsed.error}. Raw responses saved to ${join(runDir, 'judge.raw-response.log')}.`,
+    `judge output invalid after retry: ${second.error}. Raw responses saved to ${join(runDir, 'judge.raw-response.log')}.`,
   );
 }
 
@@ -353,7 +433,7 @@ async function writeRawResponse(runDir: string, label: string, raw: string): Pro
   }
 }
 
-interface SpawnJudgeOptions {
+export interface SpawnJudgeOptions {
   jsonSchema: boolean;
 }
 
@@ -396,8 +476,12 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
     proc.stderr.on('data', (d) => (stderr += d.toString()));
     const timer = setTimeout(() => {
       proc.kill('SIGKILL');
-      reject(new Error(`judge subprocess timed out after 120s`));
-    }, 120_000);
+      reject(
+        new JudgeTimeoutError(
+          `judge subprocess timed out after ${Math.round(JUDGE_SUBPROCESS_TIMEOUT_MS / 1000)}s`,
+        ),
+      );
+    }, JUDGE_SUBPROCESS_TIMEOUT_MS);
     proc.on('error', (err) => {
       clearTimeout(timer);
       reject(err);
