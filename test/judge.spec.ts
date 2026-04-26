@@ -1,7 +1,13 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  JudgeTimeoutError,
   buildJudgePrompt,
   extractFinalAssistantMessage,
   extractToolSummary,
+  runJudge,
+  type SpawnJudgeFn,
 } from '../src/server/judge.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
 import type { OutputFile, RunConfig, TranscriptFile } from '@shared/schemas/run.js';
@@ -53,15 +59,23 @@ function expect(actual: string, expected: string, label: string): void {
   }
 }
 
-function scenario(name: string, run: () => void): void {
-  process.stdout.write(`• ${name} … `);
-  try {
-    run();
-    process.stdout.write('PASS\n');
-  } catch (err) {
-    process.stdout.write('FAIL\n');
-    console.error(err);
-    process.exit(1);
+const queue: { name: string; run: () => void | Promise<void> }[] = [];
+
+function scenario(name: string, run: () => void | Promise<void>): void {
+  queue.push({ name, run });
+}
+
+async function runAllScenarios(): Promise<void> {
+  for (const { name, run } of queue) {
+    process.stdout.write(`• ${name} … `);
+    try {
+      await run();
+      process.stdout.write('PASS\n');
+    } catch (err) {
+      process.stdout.write('FAIL\n');
+      console.error(err);
+      process.exit(1);
+    }
   }
 }
 
@@ -463,4 +477,150 @@ scenario('extractToolSummary: unknown id falls back to FIFO oldest-first', () =>
   expect(lines[0]!, 'Read(r-args) → r-body', 'fallback when id mismatched');
 });
 
+// --- runJudge: timeout-feeds-retry-loop (issue #12) ----------------------
+
+const VALID_JUDGE_RESULT = JSON.stringify({
+  result: '',
+  structured_output: {
+    scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+    scoreRationales: {
+      accuracy: '75 not 100 because some claims unverified.',
+      completeness: '75 not 100 because one minor gap.',
+      adherence: '75 not 100 because optional step skipped.',
+      clarity: '75 not 100 because one paragraph rambles.',
+    },
+    rationale: 'overall solid; small gaps across the rubric kept it from a perfect score.',
+  },
+});
+
+function makeJudgeInputForTmp(runDir: string): {
+  claudeBin: string;
+  runDir: string;
+  runConfig: RunConfig;
+  transcript: TranscriptFile;
+  variantContent: string;
+  outputs: OutputFile[];
+} {
+  return {
+    claudeBin: '/bin/false',
+    runDir,
+    runConfig: makeRunConfig({ runFolder: 'run-timeout' }),
+    // Fill the transcript with plenty of bytes so halving the caps would be observable.
+    transcript: makeTranscript([assistantMessage([textBlock('x'.repeat(20_000))]), turn(1)]),
+    variantContent: 'v'.repeat(20_000),
+    outputs: [],
+  };
+}
+
+async function withTmpRunDir<T>(fn: (runDir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'mdredd-judge-test-'));
+  try {
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+scenario('runJudge: timeout on first attempt triggers retry with halved caps', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const calls: string[] = [];
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      calls.push(prompt);
+      if (calls.length === 1) {
+        throw new JudgeTimeoutError('judge subprocess timed out after 120s');
+      }
+      return VALID_JUDGE_RESULT;
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(`expected status=ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    if (calls.length !== 2) {
+      throw new Error(`expected 2 spawn calls (initial + retry), got ${calls.length}`);
+    }
+    // Halved caps must yield a strictly shorter retry prompt.
+    if (!(calls[1]!.length < calls[0]!.length)) {
+      throw new Error(
+        `retry prompt should be shorter (halved caps); first=${calls[0]!.length} retry=${calls[1]!.length}`,
+      );
+    }
+    // The retry must NOT include the schema-retry hint — that hint is only for
+    // parse failures, not timeouts.
+    if (calls[1]!.includes('# Retry required')) {
+      throw new Error('timeout-retry prompt must not include the schema-retry hint header');
+    }
+    const judgeFile = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8')) as {
+      status: string;
+      scores?: { accuracy: number };
+    };
+    if (judgeFile.status !== 'ok' || judgeFile.scores?.accuracy !== 75) {
+      throw new Error(`judge.json did not reflect retry success: ${JSON.stringify(judgeFile)}`);
+    }
+  });
+});
+
+scenario('runJudge: timeout on both attempts records errored status', async () => {
+  await withTmpRunDir(async (runDir) => {
+    let calls = 0;
+    const spawnFn: SpawnJudgeFn = async () => {
+      calls++;
+      throw new JudgeTimeoutError('judge subprocess timed out after 120s');
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'errored') {
+      throw new Error(`expected status=errored after two timeouts, got ${result.status}`);
+    }
+    if (calls !== 2) {
+      throw new Error(`expected exactly 2 spawn calls (cap = 1 retry), got ${calls}`);
+    }
+    if (!result.error || !/retry/i.test(result.error)) {
+      throw new Error(`expected error to mention retry, got ${result.error ?? '(none)'}`);
+    }
+  });
+});
+
+scenario('runJudge: parse-failure retry path still works (regression)', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const prompts: string[] = [];
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) return 'this is not json at all';
+      return VALID_JUDGE_RESULT;
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(`expected status=ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    // Schema retry keeps original caps and appends a hint — retry prompt should be LONGER.
+    if (!(prompts[1]!.length > prompts[0]!.length)) {
+      throw new Error(
+        `schema-retry prompt should be longer than first; first=${prompts[0]!.length} retry=${prompts[1]!.length}`,
+      );
+    }
+    if (!prompts[1]!.includes('# Retry required')) {
+      throw new Error('schema-retry prompt should include the retry hint header');
+    }
+  });
+});
+
+scenario('buildJudgePrompt: bytesCapMultiplier of 0.5 shrinks bounded sections', () => {
+  const big = 'x'.repeat(50_000);
+  const input = {
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ prompt: big }),
+    transcript: makeTranscript([assistantMessage([textBlock(big)]), turn(1)]),
+    variantContent: big,
+    outputs: [],
+  };
+  const full = buildJudgePrompt(input);
+  const half = buildJudgePrompt(input, { bytesCapMultiplier: 0.5 });
+  if (!(half.prompt.length < full.prompt.length)) {
+    throw new Error(
+      `halved prompt should be shorter; full=${full.prompt.length} half=${half.prompt.length}`,
+    );
+  }
+});
+
+await runAllScenarios();
 console.log('\nAll judge scenarios passed.');
