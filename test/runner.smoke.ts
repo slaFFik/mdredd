@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Runner } from '../src/server/runner.js';
@@ -609,6 +609,331 @@ await scenario(
       else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
       if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
       else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario('transcript.ndjson: events are appended incrementally during the run', async () => {
+  await withSandbox(
+    'ndjson-incremental',
+    async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'go',
+        model: 'haiku',
+        mode: 'read-only',
+        caps: { turns: 100, wallClockMs: 30_000 },
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'many-turns',
+          FAKE_CLAUDE_TURNS: '4',
+          FAKE_CLAUDE_PER_TURN_DELAY_MS: '80',
+        },
+      });
+      await runner.start();
+      // Sample the on-disk ndjson while the run is still in flight. The
+      // file is being appended to as we read, so a sample can land in the
+      // middle of the last line — only complete lines (those followed by
+      // \n) are guaranteed to be valid JSON.
+      let midLines: string[] = [];
+      for (let i = 0; i < 25; i++) {
+        await new Promise((r) => setTimeout(r, 40));
+        const mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
+        const endsWithNewline = mid.endsWith('\n');
+        const candidates = mid.split('\n');
+        const completeLines = endsWithNewline ? candidates : candidates.slice(0, -1);
+        const nonEmpty = completeLines.filter((l) => l.trim());
+        if (nonEmpty.length >= 1) {
+          // Each complete line must parse — torn tail was already excluded.
+          for (const line of nonEmpty) JSON.parse(line);
+          midLines = nonEmpty;
+          break;
+        }
+      }
+      if (midLines.length === 0) {
+        throw new Error('no complete events appeared in transcript.ndjson before run end');
+      }
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const fullRaw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
+      const fullLines = fullRaw.split('\n').filter((l) => l.trim());
+      if (fullLines.length < midLines.length) {
+        throw new Error(
+          `final ndjson shorter than mid-run sample: ${fullLines.length} < ${midLines.length}`,
+        );
+      }
+      const turns = fullLines
+        .map((l) => JSON.parse(l) as { t: string })
+        .filter((e) => e.t === 'turn');
+      if (turns.length !== 4) {
+        throw new Error(`expected 4 turn events in ndjson, got ${turns.length}`);
+      }
+      // Final transcript.json must agree with the ndjson stream (issue #10).
+      const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
+        events: Array<{ t: string }>;
+      };
+      if (transcript.events.length !== fullLines.length) {
+        throw new Error(
+          `transcript.json events (${transcript.events.length}) != ndjson lines (${fullLines.length})`,
+        );
+      }
+    },
+  );
+});
+
+await scenario(
+  'readRunBundle: replays partial transcript from ndjson when transcript.json missing',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-partial-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const runFolder = `run-partial-${Date.now()}`;
+      const runDir = join(storageRoot, runFolder);
+      const config: RunConfig = {
+        runFolder,
+        columnId: 'col-1',
+        variantName: 'partial',
+        variantType: 'CLAUDE.md',
+        skillOrAgentName: null,
+        variantContentSha256: '',
+        promptSha256: '',
+        prompt: 'p',
+        model: 'haiku',
+        mode: 'read-only',
+        status: 'streaming',
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        turnCount: 1,
+        wallClockMs: 0,
+        truncationReason: null,
+        exitCode: null,
+        signal: null,
+        errorMessage: null,
+        toolAllowlist: [],
+        caps: { turns: 50, wallClockMs: 30_000 },
+      };
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+      // Two valid lines + one torn (trailing partial) line — readPartialTranscript
+      // tolerates the torn last line and returns the parseable prefix.
+      const lines = [
+        JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),
+        JSON.stringify({ t: 'message', role: 'assistant', content: 'hi', ts: Date.now() }),
+        '{"t":"partial","chunk":"abc',
+      ];
+      await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
+
+      const bundle = await session.readRunBundle(runFolder);
+      if (!bundle) throw new Error('expected bundle, got null');
+      if (!bundle.transcript) throw new Error('expected partial transcript, got null');
+      if (bundle.transcript.events.length !== 2) {
+        throw new Error(`expected 2 parseable events, got ${bundle.transcript.events.length}`);
+      }
+      if (bundle.transcript.status !== 'streaming') {
+        throw new Error(`expected status streaming (from config), got ${bundle.transcript.status}`);
+      }
+      if (bundle.transcript.runFolder !== runFolder) {
+        throw new Error(`runFolder mismatch: ${bundle.transcript.runFolder}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.init: bumps seq past ring-buffer to avoid Last-Event-ID collisions',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      await writeFile(join(storageRoot, '.seq'), JSON.stringify({ seq: 100 }));
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init();
+      // emitHeartbeat is the only public way to allocate a seq; capture it via subscribe.
+      let observed = -1;
+      rm1.subscribe({
+        lastEventId: 0,
+        onEvent: (e) => {
+          if (observed < 0) observed = e.seq;
+        },
+        onClose: () => {},
+      });
+      rm1.emitHeartbeat();
+      // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
+      if (observed !== 100 + 2000 + 1) {
+        throw new Error(`expected first emit seq=2101, got ${observed}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.init: reaps stale preparing/streaming runs from a previous boot',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-reap-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const { mkdir } = await import('node:fs/promises');
+      const makeStaleRun = async (
+        name: string,
+        status: 'preparing' | 'streaming' | 'completed',
+      ): Promise<RunConfig> => {
+        const runDir = join(storageRoot, name);
+        await mkdir(runDir, { recursive: true });
+        const config: RunConfig = {
+          runFolder: name,
+          columnId: 'col-1',
+          variantName: name,
+          variantType: 'CLAUDE.md',
+          skillOrAgentName: null,
+          variantContentSha256: '',
+          promptSha256: '',
+          prompt: 'p',
+          model: 'haiku',
+          mode: 'read-only',
+          status,
+          startedAt: new Date().toISOString(),
+          endedAt: status === 'completed' ? new Date().toISOString() : null,
+          turnCount: 0,
+          wallClockMs: 0,
+          truncationReason: null,
+          exitCode: null,
+          signal: null,
+          errorMessage: null,
+          toolAllowlist: [],
+          caps: { turns: 50, wallClockMs: 30_000 },
+        };
+        await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+        return config;
+      };
+      await makeStaleRun('run-prep', 'preparing');
+      await makeStaleRun('run-stream', 'streaming');
+      await makeStaleRun('run-done', 'completed');
+
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init();
+
+      const prep = JSON.parse(await readFile(join(storageRoot, 'run-prep', 'config.json'), 'utf8'));
+      const stream = JSON.parse(
+        await readFile(join(storageRoot, 'run-stream', 'config.json'), 'utf8'),
+      );
+      const done = JSON.parse(await readFile(join(storageRoot, 'run-done', 'config.json'), 'utf8'));
+
+      if (prep.status !== 'errored')
+        throw new Error(`expected run-prep errored, got ${prep.status}`);
+      if (prep.errorMessage !== 'harness exited mid-run') {
+        throw new Error(`expected harness-exited message, got ${prep.errorMessage}`);
+      }
+      if (!prep.endedAt) throw new Error('expected endedAt to be set on reaped run');
+      if (stream.status !== 'errored')
+        throw new Error(`expected run-stream errored, got ${stream.status}`);
+      // Terminal runs are NOT touched by the reaper.
+      if (done.status !== 'completed')
+        throw new Error(`expected run-done untouched, got ${done.status}`);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.emit: debounced .seq persistence catches up after the burst',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-debounce-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init(); // seq is now RING_BUFFER_LIMIT
+      // Burst of heartbeats — each one schedules a (debounced) .seq write.
+      for (let i = 0; i < 30; i++) rm1.emitHeartbeat();
+      // Quiesce: poll until on-disk seq matches the expected post-burst value.
+      const expectedSeq = 2000 + 30;
+      let onDisk = -1;
+      for (let i = 0; i < 50; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        const persisted = JSON.parse(
+          await readFile(join(storageRoot, '.seq'), 'utf8').catch(() => '{"seq":-1}'),
+        ) as { seq: number };
+        onDisk = persisted.seq;
+        if (onDisk === expectedSeq) break;
+      }
+      if (onDisk !== expectedSeq) {
+        throw new Error(`expected .seq=${expectedSeq} on disk, got ${onDisk}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'readPartialTranscript: drops schema-invalid lines but keeps the valid prefix',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-ndjson-validate-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const runFolder = `run-validate-${Date.now()}`;
+      const runDir = join(storageRoot, runFolder);
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(runDir, { recursive: true });
+      const config: RunConfig = {
+        runFolder,
+        columnId: 'col-1',
+        variantName: 'validate',
+        variantType: 'CLAUDE.md',
+        skillOrAgentName: null,
+        variantContentSha256: '',
+        promptSha256: '',
+        prompt: 'p',
+        model: 'haiku',
+        mode: 'read-only',
+        status: 'streaming',
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        turnCount: 0,
+        wallClockMs: 0,
+        truncationReason: null,
+        exitCode: null,
+        signal: null,
+        errorMessage: null,
+        toolAllowlist: [],
+        caps: { turns: 50, wallClockMs: 30_000 },
+      };
+      await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+      const lines = [
+        JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }), // valid
+        JSON.stringify({ t: 'unknown-future-event', ts: Date.now() }), // schema-invalid
+        JSON.stringify({ t: 'message', role: 'assistant', content: 'ok', ts: Date.now() }), // valid
+        JSON.stringify({ t: 'turn', turn: 'oops', ts: Date.now() }), // wrong type, schema-invalid
+      ];
+      await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
+
+      const bundle = await session.readRunBundle(runFolder);
+      if (!bundle?.transcript) throw new Error('expected partial transcript');
+      if (bundle.transcript.events.length !== 2) {
+        throw new Error(
+          `expected 2 valid events after schema filter, got ${bundle.transcript.events.length}`,
+        );
+      }
+      const kinds = bundle.transcript.events.map((e) => e.t);
+      if (kinds.join(',') !== 'turn,message') {
+        throw new Error(`unexpected event kinds: ${kinds.join(',')}`);
+      }
+    } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   },

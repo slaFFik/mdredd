@@ -7,8 +7,8 @@ import { deriveSlug, listRunFolderNames } from './slug.js';
 import { runJudge } from './judge.js';
 import { SessionStore } from './session.js';
 import { log } from './log.js';
-import { readFile } from 'node:fs/promises';
-import { atomicWriteJson, readJsonIfExists } from './fsUtil.js';
+import { readFile, readdir } from 'node:fs/promises';
+import { atomicWriteJson, isNotFound, readJsonIfExists } from './fsUtil.js';
 import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { Mode, RunStatus } from '@shared/schemas/types.js';
@@ -16,6 +16,11 @@ import type { ColumnConfig } from '@shared/schemas/session.js';
 
 const SEQ_FILE = '.seq';
 const RING_BUFFER_LIMIT = 2_000;
+// Lower-bound the gap between .seq writes. With Claude streaming many
+// `run.partial` events per second, an unthrottled atomicWriteJson loop
+// (tmp-file + rename per write) would chew real disk; 250ms keeps post-crash
+// gap small without dominating I/O during bursty turns.
+const SEQ_PERSIST_MIN_INTERVAL_MS = 250;
 
 export interface RunManagerOptions {
   claudeBin: string;
@@ -36,6 +41,10 @@ export class RunManager extends EventEmitter {
   private readonly ring: ServerSseEvent[] = [];
   private readonly subscribers = new Set<SseSubscriber>();
   private seq = 0;
+  private seqDirty = false;
+  private seqWriting = false;
+  private seqLastWriteAt = 0;
+  private seqDeferredTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: RunManagerOptions) {
     super();
@@ -46,7 +55,50 @@ export class RunManager extends EventEmitter {
     const persisted = await readJsonIfExists<{ seq: number }>(
       join(this.opts.storageRoot, SEQ_FILE),
     );
-    this.seq = persisted?.seq ?? 0;
+    // .seq used to be persisted only every 25 events; the in-memory seq is
+    // now flushed (debounced) on every emit, but a hard kill between the
+    // last write and the next emit could still leave a small gap. Advance
+    // past the whole ring buffer on restart so post-crash seqs cannot
+    // collide with Last-Event-ID values clients still hold — otherwise the
+    // SSE resume-from-ring filter (`e.seq > sub.lastEventId`) would skip
+    // legitimately new events. Issue #10.
+    this.seq = (persisted?.seq ?? 0) + RING_BUFFER_LIMIT;
+    await this.reapStaleRuns();
+  }
+
+  /**
+   * Rewrite any run still marked `preparing`/`streaming` on disk (i.e. the
+   * harness died mid-run on a previous boot) as `errored`, so the UI doesn't
+   * display a forever-running spinner. The ndjson prefix stays on disk so
+   * the user can still see what evidence had been captured. Issue #10.
+   */
+  private async reapStaleRuns(): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(this.opts.storageRoot, { withFileTypes: true });
+    } catch (err) {
+      if (isNotFound(err)) return;
+      throw err;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const runDir = join(this.opts.storageRoot, entry.name);
+      const config = await readJsonIfExists<RunConfig>(join(runDir, 'config.json'));
+      if (!config) continue;
+      if (config.status !== 'preparing' && config.status !== 'streaming') continue;
+      config.status = 'errored';
+      config.errorMessage = config.errorMessage ?? 'harness exited mid-run';
+      config.endedAt = config.endedAt ?? new Date().toISOString();
+      try {
+        await atomicWriteJson(join(runDir, 'config.json'), config);
+        log.info('runManager.reap-stale-run', { runFolder: entry.name });
+      } catch (err) {
+        log.warn('runManager.reap-stale-run-failed', {
+          runFolder: entry.name,
+          error: (err as Error).message,
+        });
+      }
+    }
   }
 
   hasActive(): boolean {
@@ -78,7 +130,10 @@ export class RunManager extends EventEmitter {
    */
   async stopAll(timeoutMs: number = 5000): Promise<{ stopped: number; timedOut: boolean }> {
     const runners = Array.from(this.active.values());
-    if (runners.length === 0) return { stopped: 0, timedOut: false };
+    if (runners.length === 0) {
+      await this.flushSeqNow();
+      return { stopped: 0, timedOut: false };
+    }
     log.info('runManager.stopAll', { count: runners.length, timeoutMs });
     const drain = Promise.all(
       runners.map(async (r) => {
@@ -100,6 +155,9 @@ export class RunManager extends EventEmitter {
         }, timeoutMs);
       }),
     ]);
+    // Flush latest seq to disk before the process exits, so a client that
+    // reconnects against the next harness boot lines up cleanly.
+    await this.flushSeqNow();
     return { stopped: runners.length, timedOut };
   }
 
@@ -130,13 +188,80 @@ export class RunManager extends EventEmitter {
         log.warn('runManager.sub-emit-error', { error: (err as Error).message });
       }
     }
-    // Persist seq lazily every 25 events to reduce FS churn.
-    if (this.seq % 25 === 0) {
-      atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: this.seq }).catch((err) => {
-        log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
-      });
-    }
+    this.schedulePersistSeq();
     return full;
+  }
+
+  /**
+   * Persist seq with two layers of coalescing:
+   *  - at most one atomic write in flight (single-flight),
+   *  - a SEQ_PERSIST_MIN_INTERVAL_MS floor between successive writes so a
+   *    `run.partial` storm doesn't translate to one tmp-file+rename per
+   *    delta.
+   * On `seqDirty` arriving while throttled, a single deferred timer is
+   * scheduled to flush after the floor elapses; further dirty marks coalesce
+   * into that pending flush. Bounds post-crash gap to ~250ms of events.
+   */
+  private schedulePersistSeq(): void {
+    this.seqDirty = true;
+    if (this.seqWriting) return;
+    const now = Date.now();
+    const sinceLast = now - this.seqLastWriteAt;
+    if (sinceLast < SEQ_PERSIST_MIN_INTERVAL_MS) {
+      if (this.seqDeferredTimer === null) {
+        this.seqDeferredTimer = setTimeout(() => {
+          this.seqDeferredTimer = null;
+          this.startSeqWrite();
+        }, SEQ_PERSIST_MIN_INTERVAL_MS - sinceLast);
+        this.seqDeferredTimer.unref();
+      }
+      return;
+    }
+    this.startSeqWrite();
+  }
+
+  private startSeqWrite(): void {
+    if (this.seqWriting || !this.seqDirty) return;
+    this.seqWriting = true;
+    void this.flushSeq();
+  }
+
+  private async flushSeq(): Promise<void> {
+    while (this.seqDirty) {
+      this.seqDirty = false;
+      const current = this.seq;
+      try {
+        await atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: current });
+        this.seqLastWriteAt = Date.now();
+      } catch (err) {
+        log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
+      }
+    }
+    this.seqWriting = false;
+    // If more events came in mid-write while throttled, reschedule.
+    if (this.seqDirty) this.schedulePersistSeq();
+  }
+
+  /**
+   * Force-flush any pending seq write. Called on graceful shutdown so the
+   * latest seq value lands on disk before the process exits.
+   */
+  async flushSeqNow(): Promise<void> {
+    if (this.seqDeferredTimer !== null) {
+      clearTimeout(this.seqDeferredTimer);
+      this.seqDeferredTimer = null;
+    }
+    if (!this.seqDirty && !this.seqWriting) return;
+    if (this.seqWriting) {
+      // Wait for the in-flight write to drain; flushSeq's loop will pick up
+      // any remaining seqDirty marks before resolving.
+      while (this.seqWriting) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return;
+    }
+    this.seqWriting = true;
+    await this.flushSeq();
   }
 
   emitHeartbeat(): void {

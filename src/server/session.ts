@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { atomicWriteJson, ensureDir, pathExists, readJsonIfExists } from './fsUtil.js';
+import { readdir, readFile, rm } from 'node:fs/promises';
+import { atomicWriteJson, ensureDir, isNotFound, pathExists, readJsonIfExists } from './fsUtil.js';
 import { SESSION_FILE, GITIGNORE_FILE, LOCK_FILE } from '@shared/constants.js';
 import {
   makeDefaultSession,
@@ -10,6 +10,7 @@ import {
 } from '@shared/schemas/session.js';
 import type { RunConfig } from '@shared/schemas/run.js';
 import type { TranscriptFile } from '@shared/schemas/run.js';
+import { NormalizedEventSchema, type NormalizedEvent } from '@shared/schemas/events.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import { log } from './log.js';
 
@@ -97,7 +98,14 @@ export class SessionStore {
     const runDir = join(this.storageRoot, runFolder);
     const config = await readJsonIfExists<RunConfig>(join(runDir, 'config.json'));
     if (!config) return null;
-    const transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
+    // Prefer the finalized transcript.json. For in-flight runs (or harness
+    // crash recovery) it doesn't exist yet — replay the append-only
+    // transcript.ndjson prefix so /api/state still surfaces evidence so far
+    // (issue #10).
+    let transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
+    if (!transcript) {
+      transcript = await readPartialTranscript(runDir, config);
+    }
     const judge = await readJsonIfExists<JudgeFile>(join(runDir, 'judge.json'));
     const outputs = await this.listOutputs(join(runDir, 'outputs'));
     return { config, transcript, judge, outputs };
@@ -143,6 +151,47 @@ export class SessionStore {
   }
 }
 
-// Suppress unused import — writeFile is reserved for potential future atomic-patch paths.
-void writeFile;
-void readFile;
+/**
+ * Reconstruct a partial TranscriptFile from the append-only `transcript.ndjson`
+ * log. Used for in-flight runs (and crash recovery) before runner.finalize()
+ * has written the canonical transcript.json. Best-effort: malformed lines are
+ * skipped so a torn final write can't black-hole the whole prefix.
+ */
+async function readPartialTranscript(
+  runDir: string,
+  config: RunConfig,
+): Promise<TranscriptFile | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+  const events: NormalizedEvent[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // tolerate a torn last line (process killed mid-write)
+      continue;
+    }
+    // Schema-validate so a future event-shape change or a corrupted line
+    // can't poison the whole transcript view; bad lines are dropped.
+    const result = NormalizedEventSchema.safeParse(parsed);
+    if (result.success) events.push(result.data);
+  }
+  return {
+    runFolder: config.runFolder,
+    events,
+    status: config.status,
+    startedAt: config.startedAt,
+    endedAt: config.endedAt,
+    turnCount: config.turnCount,
+    wallClockMs: config.wallClockMs,
+    truncationReason: config.truncationReason,
+  };
+}
