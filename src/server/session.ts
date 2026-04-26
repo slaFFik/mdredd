@@ -10,7 +10,7 @@ import {
 } from '@shared/schemas/session.js';
 import type { RunConfig } from '@shared/schemas/run.js';
 import type { TranscriptFile } from '@shared/schemas/run.js';
-import type { NormalizedEvent } from '@shared/schemas/events.js';
+import { NormalizedEventSchema, type NormalizedEvent } from '@shared/schemas/events.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import { log } from './log.js';
 
@@ -175,11 +175,17 @@ async function readPartialTranscript(
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    let parsed: unknown;
     try {
-      events.push(JSON.parse(trimmed) as NormalizedEvent);
+      parsed = JSON.parse(trimmed);
     } catch {
       // tolerate a torn last line (process killed mid-write)
+      continue;
     }
+    // Schema-validate so a future event-shape change or a corrupted line
+    // can't poison the whole transcript view; bad lines are dropped.
+    const result = NormalizedEventSchema.safeParse(parsed);
+    if (result.success) events.push(result.data);
   }
   return {
     runFolder: config.runFolder,

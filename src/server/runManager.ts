@@ -7,8 +7,8 @@ import { deriveSlug, listRunFolderNames } from './slug.js';
 import { runJudge } from './judge.js';
 import { SessionStore } from './session.js';
 import { log } from './log.js';
-import { readFile } from 'node:fs/promises';
-import { atomicWriteJson, readJsonIfExists } from './fsUtil.js';
+import { readFile, readdir } from 'node:fs/promises';
+import { atomicWriteJson, isNotFound, readJsonIfExists } from './fsUtil.js';
 import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { Mode, RunStatus } from '@shared/schemas/types.js';
@@ -36,6 +36,8 @@ export class RunManager extends EventEmitter {
   private readonly ring: ServerSseEvent[] = [];
   private readonly subscribers = new Set<SseSubscriber>();
   private seq = 0;
+  private seqDirty = false;
+  private seqWriting = false;
 
   constructor(opts: RunManagerOptions) {
     super();
@@ -44,14 +46,50 @@ export class RunManager extends EventEmitter {
 
   async init(): Promise<void> {
     const persisted = await readJsonIfExists<{ seq: number }>(join(this.opts.storageRoot, SEQ_FILE));
-    // .seq is persisted only every 25 events, so a crash can leave the
-    // on-disk value up to 24 events behind the seqs the previous server
-    // already streamed to clients. After a restart, advance past the entire
-    // ring buffer so any new events use seqs strictly higher than anything a
-    // browser may still hold as Last-Event-ID — otherwise the SSE
-    // resume-from-ring filter (`e.seq > sub.lastEventId`) would skip
+    // .seq used to be persisted only every 25 events; the in-memory seq is
+    // now flushed (debounced) on every emit, but a hard kill between the
+    // last write and the next emit could still leave a small gap. Advance
+    // past the whole ring buffer on restart so post-crash seqs cannot
+    // collide with Last-Event-ID values clients still hold — otherwise the
+    // SSE resume-from-ring filter (`e.seq > sub.lastEventId`) would skip
     // legitimately new events. Issue #10.
     this.seq = (persisted?.seq ?? 0) + RING_BUFFER_LIMIT;
+    await this.reapStaleRuns();
+  }
+
+  /**
+   * Rewrite any run still marked `preparing`/`streaming` on disk (i.e. the
+   * harness died mid-run on a previous boot) as `errored`, so the UI doesn't
+   * display a forever-running spinner. The ndjson prefix stays on disk so
+   * the user can still see what evidence had been captured. Issue #10.
+   */
+  private async reapStaleRuns(): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(this.opts.storageRoot, { withFileTypes: true });
+    } catch (err) {
+      if (isNotFound(err)) return;
+      throw err;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const runDir = join(this.opts.storageRoot, entry.name);
+      const config = await readJsonIfExists<RunConfig>(join(runDir, 'config.json'));
+      if (!config) continue;
+      if (config.status !== 'preparing' && config.status !== 'streaming') continue;
+      config.status = 'errored';
+      config.errorMessage = config.errorMessage ?? 'harness exited mid-run';
+      config.endedAt = config.endedAt ?? new Date().toISOString();
+      try {
+        await atomicWriteJson(join(runDir, 'config.json'), config);
+        log.info('runManager.reap-stale-run', { runFolder: entry.name });
+      } catch (err) {
+        log.warn('runManager.reap-stale-run-failed', {
+          runFolder: entry.name,
+          error: (err as Error).message,
+        });
+      }
+    }
   }
 
   hasActive(): boolean {
@@ -134,13 +172,35 @@ export class RunManager extends EventEmitter {
         log.warn('runManager.sub-emit-error', { error: (err as Error).message });
       }
     }
-    // Persist seq lazily every 25 events to reduce FS churn.
-    if (this.seq % 25 === 0) {
-      atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: this.seq }).catch((err) => {
-        log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
-      });
-    }
+    this.schedulePersistSeq();
     return full;
+  }
+
+  /**
+   * Debounced seq persist: at most one atomic write in flight; on completion
+   * if more events came in, write again with the latest value. Bounds the
+   * post-crash gap to a single write cycle (typically a few ms) instead of
+   * the previous 25-event window — clients reconnecting via the in-memory
+   * ring are far less likely to hit the +RING_BUFFER_LIMIT bump path.
+   */
+  private schedulePersistSeq(): void {
+    this.seqDirty = true;
+    if (this.seqWriting) return;
+    this.seqWriting = true;
+    void this.flushSeq();
+  }
+
+  private async flushSeq(): Promise<void> {
+    while (this.seqDirty) {
+      this.seqDirty = false;
+      const current = this.seq;
+      try {
+        await atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: current });
+      } catch (err) {
+        log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
+      }
+    }
+    this.seqWriting = false;
   }
 
   emitHeartbeat(): void {

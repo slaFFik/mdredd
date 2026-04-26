@@ -748,4 +748,146 @@ await scenario('runManager.init: bumps seq past ring-buffer to avoid Last-Event-
   }
 });
 
+await scenario('runManager.init: reaps stale preparing/streaming runs from a previous boot', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-reap-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    const { mkdir } = await import('node:fs/promises');
+    const makeStaleRun = async (name: string, status: 'preparing' | 'streaming' | 'completed'): Promise<RunConfig> => {
+      const runDir = join(storageRoot, name);
+      await mkdir(runDir, { recursive: true });
+      const config: RunConfig = {
+        runFolder: name,
+        columnId: 'col-1',
+        variantName: name,
+        variantType: 'CLAUDE.md',
+        skillOrAgentName: null,
+        variantContentSha256: '',
+        promptSha256: '',
+        prompt: 'p',
+        model: 'haiku',
+        mode: 'read-only',
+        status,
+        startedAt: new Date().toISOString(),
+        endedAt: status === 'completed' ? new Date().toISOString() : null,
+        turnCount: 0,
+        wallClockMs: 0,
+        truncationReason: null,
+        exitCode: null,
+        signal: null,
+        errorMessage: null,
+        toolAllowlist: [],
+        caps: { turns: 50, wallClockMs: 30_000 },
+      };
+      await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+      return config;
+    };
+    await makeStaleRun('run-prep', 'preparing');
+    await makeStaleRun('run-stream', 'streaming');
+    await makeStaleRun('run-done', 'completed');
+
+    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+    await rm1.init();
+
+    const prep = JSON.parse(await readFile(join(storageRoot, 'run-prep', 'config.json'), 'utf8'));
+    const stream = JSON.parse(await readFile(join(storageRoot, 'run-stream', 'config.json'), 'utf8'));
+    const done = JSON.parse(await readFile(join(storageRoot, 'run-done', 'config.json'), 'utf8'));
+
+    if (prep.status !== 'errored') throw new Error(`expected run-prep errored, got ${prep.status}`);
+    if (prep.errorMessage !== 'harness exited mid-run') {
+      throw new Error(`expected harness-exited message, got ${prep.errorMessage}`);
+    }
+    if (!prep.endedAt) throw new Error('expected endedAt to be set on reaped run');
+    if (stream.status !== 'errored') throw new Error(`expected run-stream errored, got ${stream.status}`);
+    // Terminal runs are NOT touched by the reaper.
+    if (done.status !== 'completed') throw new Error(`expected run-done untouched, got ${done.status}`);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+await scenario('runManager.emit: debounced .seq persistence catches up after the burst', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-debounce-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+    await rm1.init(); // seq is now RING_BUFFER_LIMIT
+    // Burst of heartbeats — each one schedules a (debounced) .seq write.
+    for (let i = 0; i < 30; i++) rm1.emitHeartbeat();
+    // Quiesce: poll until on-disk seq matches the expected post-burst value.
+    const expectedSeq = 2000 + 30;
+    let onDisk = -1;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      const persisted = JSON.parse(
+        await readFile(join(storageRoot, '.seq'), 'utf8').catch(() => '{"seq":-1}'),
+      ) as { seq: number };
+      onDisk = persisted.seq;
+      if (onDisk === expectedSeq) break;
+    }
+    if (onDisk !== expectedSeq) {
+      throw new Error(`expected .seq=${expectedSeq} on disk, got ${onDisk}`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+await scenario('readPartialTranscript: drops schema-invalid lines but keeps the valid prefix', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-ndjson-validate-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    const runFolder = `run-validate-${Date.now()}`;
+    const runDir = join(storageRoot, runFolder);
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(runDir, { recursive: true });
+    const config: RunConfig = {
+      runFolder,
+      columnId: 'col-1',
+      variantName: 'validate',
+      variantType: 'CLAUDE.md',
+      skillOrAgentName: null,
+      variantContentSha256: '',
+      promptSha256: '',
+      prompt: 'p',
+      model: 'haiku',
+      mode: 'read-only',
+      status: 'streaming',
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      turnCount: 0,
+      wallClockMs: 0,
+      truncationReason: null,
+      exitCode: null,
+      signal: null,
+      errorMessage: null,
+      toolAllowlist: [],
+      caps: { turns: 50, wallClockMs: 30_000 },
+    };
+    await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+    const lines = [
+      JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),         // valid
+      JSON.stringify({ t: 'unknown-future-event', ts: Date.now() }),  // schema-invalid
+      JSON.stringify({ t: 'message', role: 'assistant', content: 'ok', ts: Date.now() }), // valid
+      JSON.stringify({ t: 'turn', turn: 'oops', ts: Date.now() }),    // wrong type, schema-invalid
+    ];
+    await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
+
+    const bundle = await session.readRunBundle(runFolder);
+    if (!bundle?.transcript) throw new Error('expected partial transcript');
+    if (bundle.transcript.events.length !== 2) {
+      throw new Error(`expected 2 valid events after schema filter, got ${bundle.transcript.events.length}`);
+    }
+    const kinds = bundle.transcript.events.map((e) => e.t);
+    if (kinds.join(',') !== 'turn,message') {
+      throw new Error(`unexpected event kinds: ${kinds.join(',')}`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 console.log('\nAll runner smoke scenarios passed.');

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { ServerSseEvent } from '@shared/schemas/events.js';
+import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { ColumnConfig, SessionFile } from '@shared/schemas/session.js';
 import type { ColumnStatus } from '@shared/schemas/types.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
@@ -75,6 +75,62 @@ function emptyLive(): ColumnLiveState {
   return { events: [], turnCount: 0, tookMs: 0, startedAt: null, lastTool: null };
 }
 
+/**
+ * Project a persisted normalized transcript onto the live-event shape so a
+ * mid-run page refresh still surfaces the prefix. Mirrors the live SSE
+ * reducer: same `partial` collapsing rule, drops `message` aggregates (the
+ * SSE path never produces them — they're durability dupes of partial
+ * content; see claudeStream.ts handleAggregateMessage). Issue #10.
+ */
+function liveStateFromTranscript(
+  events: NormalizedEvent[],
+  startedAtIso: string,
+): ColumnLiveState {
+  const startedAtParsed = Date.parse(startedAtIso);
+  const startedAt = Number.isFinite(startedAtParsed) ? startedAtParsed : null;
+  const out: ColumnLiveState['events'] = [];
+  let turnCount = 0;
+  let lastTool: string | null = null;
+  for (const e of events) {
+    switch (e.t) {
+      case 'turn': {
+        turnCount = e.turn;
+        const elapsedMs = startedAt !== null ? Math.max(0, e.ts - startedAt) : 0;
+        out.push({ kind: 'turn', turn: e.turn, elapsedMs });
+        break;
+      }
+      case 'partial': {
+        const last = out[out.length - 1];
+        if (last && last.kind === 'partial' && last.streamKind === e.kind) {
+          out[out.length - 1] = { ...last, chunk: last.chunk + e.chunk };
+        } else {
+          out.push({ kind: 'partial', streamKind: e.kind, chunk: e.chunk });
+        }
+        break;
+      }
+      case 'message':
+        break;
+      case 'toolUse':
+        lastTool = e.tool;
+        out.push({ kind: 'tool-use', tool: e.tool, argsSummary: e.argsSummary });
+        break;
+      case 'toolResult':
+        out.push({
+          kind: 'tool-result',
+          tool: e.tool,
+          resultSummary: e.resultSummary,
+          ...(e.isError !== undefined ? { isError: e.isError } : {}),
+        });
+        break;
+      case 'permissionDenied':
+        out.push({ kind: 'permission-denied', tool: e.tool, path: e.path });
+        break;
+    }
+  }
+  const tookMs = startedAt !== null ? Math.max(0, Date.now() - startedAt) : 0;
+  return { events: out, turnCount, tookMs, startedAt, lastTool };
+}
+
 function initialState(): AppState {
   return {
     loaded: false,
@@ -95,7 +151,25 @@ function reducer(state: AppState, action: Action): AppState {
     case 'snapshot': {
       const live: Record<string, ColumnLiveState> = { ...state.live };
       for (const c of action.payload.session.columns) {
-        if (!live[c.id]) live[c.id] = emptyLive();
+        if (live[c.id]) continue;
+        // Seed live state from the persisted transcript prefix when the run
+        // is still active and we have nothing in memory yet (typical hard
+        // page refresh mid-run). Without this, TranscriptView renders an
+        // empty pane until the next SSE event arrives. Issue #10.
+        const folder = c.currentRunFolder;
+        const status = action.payload.activeStatuses[c.id];
+        const bundle = folder ? action.payload.runs[folder] : undefined;
+        if (
+          bundle?.transcript &&
+          (status === 'preparing' || status === 'streaming')
+        ) {
+          live[c.id] = liveStateFromTranscript(
+            bundle.transcript.events,
+            bundle.transcript.startedAt,
+          );
+        } else {
+          live[c.id] = emptyLive();
+        }
       }
       return {
         ...state,
@@ -365,6 +439,8 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (!state.loaded) return;
+    let hadError = false;
+    let backstopTimer: number | null = null;
     const es = openSseStream(
       (event) => {
         dispatch({ type: 'sse', event });
@@ -374,15 +450,38 @@ export function App(): JSX.Element {
           void loadAll();
         }
       },
-      () => dispatch({ type: 'set-connecting', value: false }),
+      () => {
+        dispatch({ type: 'set-connecting', value: false });
+        // First successful (re)connect after an error: ring buffer may have
+        // evicted events while we were disconnected — backfill from
+        // /api/state so the persisted prefix overwrites the stale view
+        // (issue #10).
+        if (hadError) {
+          hadError = false;
+          if (backstopTimer !== null) {
+            window.clearTimeout(backstopTimer);
+            backstopTimer = null;
+          }
+          void loadAll();
+        }
+      },
       () => {
         dispatch({ type: 'set-connecting', value: true });
-        // EventSource auto-reconnects; also re-fetch state after a short delay.
-        setTimeout(() => void loadAll(), 2000);
+        // Backstop: if the browser's auto-reconnect doesn't re-open within
+        // 2s we re-fetch anyway so the user isn't staring at stale state.
+        // The onopen handler clears this when reconnect succeeds first.
+        if (!hadError) {
+          hadError = true;
+          backstopTimer = window.setTimeout(() => {
+            backstopTimer = null;
+            if (hadError) void loadAll();
+          }, 2000);
+        }
       },
     );
     esRef.current = es;
     return () => {
+      if (backstopTimer !== null) window.clearTimeout(backstopTimer);
       es.close();
       esRef.current = null;
     };
