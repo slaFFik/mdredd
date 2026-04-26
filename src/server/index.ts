@@ -32,7 +32,12 @@ async function main(): Promise<void> {
   const port = await getPort({ port: [DEFAULT_PREF_PORT, 6801, 6802, 6803, 6804, 0] });
   const auth = makeAuthContext(port);
 
-  const runManager = new RunManager({ claudeBin, cwd, storageRoot: preflight.storageRoot, session: sessionStore });
+  const runManager = new RunManager({
+    claudeBin,
+    cwd,
+    storageRoot: preflight.storageRoot,
+    session: sessionStore,
+  });
   await runManager.init();
 
   const webRoot = resolveWebRoot();

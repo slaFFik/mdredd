@@ -45,7 +45,9 @@ export class RunManager extends EventEmitter {
   }
 
   async init(): Promise<void> {
-    const persisted = await readJsonIfExists<{ seq: number }>(join(this.opts.storageRoot, SEQ_FILE));
+    const persisted = await readJsonIfExists<{ seq: number }>(
+      join(this.opts.storageRoot, SEQ_FILE),
+    );
     // .seq used to be persisted only every 25 events; the in-memory seq is
     // now flushed (debounced) on every emit, but a hard kill between the
     // last write and the next emit could still leave a small gap. Advance
@@ -164,7 +166,8 @@ export class RunManager extends EventEmitter {
     this.seq += 1;
     const full = { ...event, seq: this.seq } as ServerSseEvent;
     this.ring.push(full);
-    if (this.ring.length > RING_BUFFER_LIMIT) this.ring.splice(0, this.ring.length - RING_BUFFER_LIMIT);
+    if (this.ring.length > RING_BUFFER_LIMIT)
+      this.ring.splice(0, this.ring.length - RING_BUFFER_LIMIT);
     for (const sub of this.subscribers) {
       try {
         sub.onEvent(full);
@@ -209,7 +212,11 @@ export class RunManager extends EventEmitter {
 
   async startColumn(columnId: string): Promise<RunConfig> {
     if (this.active.has(columnId)) {
-      throw new RunManagerError('column-already-running', `column ${columnId} is already running`, 409);
+      throw new RunManagerError(
+        'column-already-running',
+        `column ${columnId} is already running`,
+        409,
+      );
     }
     const sessionSnap = this.opts.session.snapshot;
     const col = sessionSnap.columns.find((c) => c.id === columnId);
@@ -328,7 +335,8 @@ export class RunManager extends EventEmitter {
 
   async stopColumn(columnId: string): Promise<void> {
     const runner = this.active.get(columnId);
-    if (!runner) throw new RunManagerError('column-not-running', `column ${columnId} is not running`, 409);
+    if (!runner)
+      throw new RunManagerError('column-not-running', `column ${columnId} is not running`, 409);
     await runner.stop();
   }
 
@@ -338,13 +346,24 @@ export class RunManager extends EventEmitter {
         this.emitSse({ t: 'run.turn', col: columnId, turn: e.turn } as Omit<ServerSseEvent, 'seq'>);
         return;
       case 'partial':
-        this.emitSse({ t: 'run.partial', col: columnId, chunk: e.chunk, kind: e.kind } as Omit<ServerSseEvent, 'seq'>);
+        this.emitSse({ t: 'run.partial', col: columnId, chunk: e.chunk, kind: e.kind } as Omit<
+          ServerSseEvent,
+          'seq'
+        >);
         return;
       case 'message':
-        this.emitSse({ t: 'run.message', col: columnId, role: e.role, content: e.content } as Omit<ServerSseEvent, 'seq'>);
+        this.emitSse({ t: 'run.message', col: columnId, role: e.role, content: e.content } as Omit<
+          ServerSseEvent,
+          'seq'
+        >);
         return;
       case 'toolUse':
-        this.emitSse({ t: 'run.toolUse', col: columnId, tool: e.tool, argsSummary: e.argsSummary } as Omit<ServerSseEvent, 'seq'>);
+        this.emitSse({
+          t: 'run.toolUse',
+          col: columnId,
+          tool: e.tool,
+          argsSummary: e.argsSummary,
+        } as Omit<ServerSseEvent, 'seq'>);
         return;
       case 'toolResult':
         this.emitSse({
@@ -432,7 +451,11 @@ function validateColumnReady(col: ColumnConfig): void {
     throw new RunManagerError('variant-empty', 'Variant content is empty', 400);
   }
   if (col.variantType !== 'CLAUDE.md' && !col.skillOrAgentName) {
-    throw new RunManagerError('skill-agent-name-missing', `${col.variantType} variants need a name`, 400);
+    throw new RunManagerError(
+      'skill-agent-name-missing',
+      `${col.variantType} variants need a name`,
+      400,
+    );
   }
 }
 

@@ -171,7 +171,9 @@ export function buildJudgePrompt(input: JudgeInput): JudgePromptArtifacts {
   if (runConfig.truncationReason) lines.push(`- truncated_reason: ${runConfig.truncationReason}`);
   lines.push(`- turn_count: ${runConfig.turnCount}`);
   lines.push('');
-  lines.push('Reminder: emit only the JSON object described above. No prose. Never include the canary token.');
+  lines.push(
+    'Reminder: emit only the JSON object described above. No prose. Never include the canary token.',
+  );
 
   return { prompt: lines.join('\n'), canary };
 }
@@ -449,7 +451,8 @@ function tryParseJudgeOutput(
     if (!issues.success) {
       return {
         ok: false,
-        error: 'structured_output present but did not match schema: ' +
+        error:
+          'structured_output present but did not match schema: ' +
           issues.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; '),
       };
     }

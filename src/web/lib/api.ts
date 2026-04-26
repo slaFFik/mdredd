@@ -7,12 +7,15 @@ import type { LocalVariantsResponse } from '@shared/schemas/localVariants.js';
 
 export interface StateSnapshot {
   session: SessionFile;
-  runs: Record<string, {
-    config: RunConfig;
-    transcript: TranscriptFile | null;
-    judge: JudgeFile | null;
-    outputs: OutputFile[];
-  }>;
+  runs: Record<
+    string,
+    {
+      config: RunConfig;
+      transcript: TranscriptFile | null;
+      judge: JudgeFile | null;
+      outputs: OutputFile[];
+    }
+  >;
   activeStatuses: Record<string, ColumnStatus>;
 }
 
@@ -73,7 +76,9 @@ export async function fsList(relPath: string): Promise<{ path: string; entries: 
   return request(`/api/fs/list?path=${encodeURIComponent(relPath)}`);
 }
 
-export async function fsRead(relPath: string): Promise<{ path: string; content: string; size: number }> {
+export async function fsRead(
+  relPath: string,
+): Promise<{ path: string; content: string; size: number }> {
   return request(`/api/fs/read?path=${encodeURIComponent(relPath)}`);
 }
 
@@ -135,7 +140,11 @@ export async function startNew(): Promise<void> {
 
 export type SseHandler = (e: ServerSseEvent) => void;
 
-export function openSseStream(onEvent: SseHandler, onOpen?: () => void, onError?: () => void): EventSource {
+export function openSseStream(
+  onEvent: SseHandler,
+  onOpen?: () => void,
+  onError?: () => void,
+): EventSource {
   const es = new EventSource(url('/sse'));
   es.onmessage = (msg) => {
     try {

@@ -89,7 +89,10 @@ function conformToSchema(schemaRaw) {
     const schema = JSON.parse(schemaRaw);
     return synth(schema);
   } catch {
-    return { rationale: 'fake judge: schema unreadable', scores: { accuracy: 50, completeness: 50, adherence: 50, clarity: 50 } };
+    return {
+      rationale: 'fake judge: schema unreadable',
+      scores: { accuracy: 50, completeness: 50, adherence: 50, clarity: 50 },
+    };
   }
 }
 
@@ -328,7 +331,7 @@ async function runParallelToolUse() {
   emitSystemInit();
   emitMessageStart();
   emitToolUse('Glob', { pattern: '**/*.ts' }, 0); // tu-0
-  emitToolUse('Grep', { pattern: 'foo' }, 1);     // tu-1
+  emitToolUse('Grep', { pattern: 'foo' }, 1); // tu-1
   emitMessageEnd('tool_use');
   emitUserToolResult('tu-1', 'grep result body');
   emitUserToolResult('tu-0', 'glob result body');
@@ -348,9 +351,7 @@ async function runMalformed() {
 }
 
 async function runAuthError() {
-  stderr.write(
-    'Authentication required. Run `claude login` to authenticate.\n',
-  );
+  stderr.write('Authentication required. Run `claude login` to authenticate.\n');
   exit(1);
 }
 

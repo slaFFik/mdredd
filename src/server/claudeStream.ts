@@ -167,7 +167,8 @@ export class ClaudeStreamParser extends EventEmitter {
         const dtype = delta?.type;
         if (dtype === 'text_delta') {
           const text = (delta?.text as string | undefined) ?? '';
-          if (text) this.emitNormalized({ t: 'partial', chunk: text, kind: 'text', ts: Date.now() });
+          if (text)
+            this.emitNormalized({ t: 'partial', chunk: text, kind: 'text', ts: Date.now() });
         } else if (dtype === 'thinking_delta') {
           const text = (delta?.thinking as string | undefined) ?? '';
           if (text)
@@ -200,10 +201,7 @@ export class ClaudeStreamParser extends EventEmitter {
         return;
       }
       case 'message_stop': {
-        if (
-          this.currentMessageRole === 'assistant' &&
-          this.currentStopReason !== 'tool_use'
-        ) {
+        if (this.currentMessageRole === 'assistant' && this.currentStopReason !== 'tool_use') {
           this.turnCount += 1;
           this.emit('turn', this.turnCount);
           this.emitNormalized({ t: 'turn', turn: this.turnCount, ts: Date.now() });
@@ -245,8 +243,7 @@ export class ClaudeStreamParser extends EventEmitter {
               : undefined;
           // Pair by id when present; fall back to the most recent tool_use only
           // when the result lacks an id (defensive — real claude always sends one).
-          const tool =
-            (id && this.toolUseIdToName.get(id)) ?? this.currentToolName ?? 'unknown';
+          const tool = (id && this.toolUseIdToName.get(id)) ?? this.currentToolName ?? 'unknown';
           if (id) this.toolUseIdToName.delete(id);
           const rawResult = obj.content;
           const resultSummary = truncate(stringifyResult(rawResult), 200);

@@ -31,10 +31,7 @@ export function makeDefaultSession(cwd: string): SessionFile {
     judgeEnabled: true,
     defaultModel,
     cwd,
-    columns: [
-      makeBlankColumn('col-1', defaultModel),
-      makeBlankColumn('col-2', defaultModel),
-    ],
+    columns: [makeBlankColumn('col-1', defaultModel), makeBlankColumn('col-2', defaultModel)],
   };
 }
 

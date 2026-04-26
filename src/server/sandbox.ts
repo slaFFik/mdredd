@@ -1,14 +1,15 @@
-import { readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { lstat, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import type { Mode, VariantType } from '@shared/schemas/types.js';
-import { atomicWriteJson, ensureDir, pathExists } from './fsUtil.js';
+import { atomicWriteJson, ensureDir, loadGitignore, pathExists } from './fsUtil.js';
 import { log } from './log.js';
 
 export interface SandboxInput {
-  cwd: string;                     // user's project cwd
-  storageRoot: string;             // ~/.mdredd in production; tests may pass a cwd-rooted path
-  runFolder: string;               // folder name only
+  cwd: string; // user's project cwd
+  storageRoot: string; // ~/.mdredd in production; tests may pass a cwd-rooted path
+  runFolder: string; // folder name only
   variantType: VariantType;
   skillOrAgentName: string | null; // required for skill/agent, ignored for CLAUDE.md
   variantContent: string;
@@ -16,11 +17,11 @@ export interface SandboxInput {
 }
 
 export interface SandboxResult {
-  runDir: string;                  // absolute
-  projectDir: string;              // absolute — child claude's cwd
-  outputsDir: string;              // absolute — model-produced files land here
-  settingsPath: string | null;     // path of written settings.json (write mode only)
-  mirroredTopLevel: string[];      // names symlinked from user's cwd
+  runDir: string; // absolute
+  projectDir: string; // absolute — child claude's cwd
+  outputsDir: string; // absolute — model-produced files land here
+  settingsPath: string | null; // path of written settings.json (write mode only)
+  mirroredTopLevel: string[]; // names of top-level entries that were mirrored
   skippedTopLevel: Array<{ name: string; reason: string }>;
 }
 
@@ -29,21 +30,31 @@ export interface SandboxResult {
  *
  *   <storageRoot>/<runFolder>/
  *     project/           ← child claude's cwd
- *       <top-levels symlinked from user's cwd, minus conflicts/ignored>
+ *       <user's cwd mirrored as a tree of real dirs + per-file symlinks>
  *       CLAUDE.md or .claude/skills/<name>/SKILL.md or .claude/agents/<name>.md
  *       .claude/settings.json  (write mode only)
  *     outputs/           ← write target for write mode; empty in read-only
  *
- * Hard-excluded regardless of gitignore:
- *   - .git                (keep variant runs away from git state; we plant a fresh
- *                          sandbox .git below so child claude can't walk upward
- *                          and rediscover the host project's .git)
- *   - .claude             (skill/agent variants create a fresh .claude; CLAUDE.md variant
- *                          still skips user .claude to ensure a clean A/B baseline)
- *   - any entry whose realpath is or contains the storage root (defense-in-depth;
- *                          in production storage is `~/.mdredd` so this never fires,
- *                          but tests/legacy layouts may put storage inside cwd)
+ * The mirror walks the source tree recursively, creating real directories on
+ * the sandbox side and symlinking only individual files. This lets us apply
+ * filtering (gitignore, hard-exclude, symlink-target validation) at every
+ * level, not just at the top.
+ *
+ * Filtered at every level:
+ *   - HARD_EXCLUDED entries (`.git`, `.claude`, `node_modules`, `.DS_Store`)
+ *   - paths matched by the project's `.gitignore` (root + nested) and the
+ *     user's global git excludes file (`~/.config/git/ignore` or
+ *     `$XDG_CONFIG_HOME/git/ignore`)
+ *   - symlinks whose realpath escapes `cwd` (defense against attacker- or
+ *     user-placed links pointing at host secrets like `~/.aws`, `/etc`, etc.)
+ *   - symlinks that form a cycle with one of their ancestor directories on
+ *     the current walk path
+ *
+ * Filtered only at the top level (existing behavior preserved):
  *   - the variant's own canonical path (we write it ourselves below)
+ *   - any entry whose realpath is or contains the storage root (defense in
+ *     depth; production storage is `~/.mdredd` so this never fires, but
+ *     tests/legacy layouts may put storage inside cwd)
  */
 export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> {
   const runDir = join(input.storageRoot, input.runFolder);
@@ -54,58 +65,20 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
   await ensureDir(outputsDir);
   await plantSandboxGitDir(projectDir);
 
-  const ig = await loadRootGitignore(input.cwd);
   const cwdReal = await realpath(input.cwd);
+  const ignoreChain: IgnoreLayer[] = [];
+  const globalIgnore = await loadGlobalGitignore();
+  if (globalIgnore) ignoreChain.push({ prefix: '', ig: globalIgnore });
+  const rootIgnore = await loadGitignore(input.cwd);
+  if (rootIgnore) ignoreChain.push({ prefix: '', ig: rootIgnore });
 
-  const variantConflictTop = conflictTopLevel(input.variantType);
-
-  const entries = await readdir(input.cwd, { withFileTypes: true });
-  const mirrored: string[] = [];
-  const skipped: Array<{ name: string; reason: string }> = [];
-
-  for (const entry of entries) {
-    const name = entry.name;
-
-    if (HARD_EXCLUDED_TOP.has(name)) {
-      skipped.push({ name, reason: 'hard-excluded' });
-      continue;
-    }
-    if (isStorageRootDescendant(input.cwd, name, input.storageRoot)) {
-      skipped.push({ name, reason: 'storage root' });
-      continue;
-    }
-    if (variantConflictTop && name === variantConflictTop) {
-      skipped.push({ name, reason: 'variant conflict' });
-      continue;
-    }
-    // gitignore matches paths relative to repo root; add trailing slash for dirs so patterns
-    // like "node_modules/" match properly.
-    const relForIgnore = entry.isDirectory() ? `${name}/` : name;
-    if (ig.ignores(relForIgnore)) {
-      skipped.push({ name, reason: 'gitignored' });
-      continue;
-    }
-
-    const source = join(input.cwd, name);
-    // Guard against symlink cycles: if <cwd>/<name> resolves to a path that is <cwd>
-    // itself or an ancestor of it, refuse.
-    try {
-      const real = await realpath(source);
-      if (real === cwdReal || cwdReal.startsWith(real + '/')) {
-        throw new Error(`symlink cycle detected at ${source} → ${real}`);
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ELOOP') {
-        throw new Error(`symlink loop at ${source}`);
-      }
-      // ENOENT on dangling symlinks → still try to symlink; child claude will see a dangling link.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
-
-    const target = join(projectDir, name);
-    await symlink(source, target);
-    mirrored.push(name);
-  }
+  const mirror = new Mirror({
+    cwd: input.cwd,
+    cwdReal,
+    storageRootResolved: resolve(input.storageRoot),
+    variantConflictTop: conflictTopLevel(input.variantType),
+  });
+  await mirror.walk(input.cwd, projectDir, '', ignoreChain, [cwdReal], true);
 
   await placeVariant(projectDir, input);
   // Durable snapshot of the exact bytes we ran against, for judge input and audit.
@@ -118,15 +91,197 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
 
   log.info('sandbox.built', {
     runDir,
-    mirrored: mirrored.length,
-    skipped: skipped.length,
+    mirrored: mirror.mirroredTopLevel.length,
+    skipped: mirror.skippedTopLevel.length,
     mode: input.mode,
   });
 
-  return { runDir, projectDir, outputsDir, settingsPath, mirroredTopLevel: mirrored, skippedTopLevel: skipped };
+  return {
+    runDir,
+    projectDir,
+    outputsDir,
+    settingsPath,
+    mirroredTopLevel: mirror.mirroredTopLevel,
+    skippedTopLevel: mirror.skippedTopLevel,
+  };
 }
 
-const HARD_EXCLUDED_TOP = new Set<string>(['.git', '.claude', 'node_modules', '.DS_Store']);
+const HARD_EXCLUDED = new Set<string>(['.git', '.claude', 'node_modules', '.DS_Store']);
+
+interface IgnoreLayer {
+  /** Repo-root-relative directory the rules are anchored at; '' for root/global. */
+  prefix: string;
+  ig: Ignore;
+}
+
+interface MirrorContext {
+  cwd: string;
+  cwdReal: string;
+  storageRootResolved: string;
+  variantConflictTop: string | null;
+}
+
+class Mirror {
+  readonly mirroredTopLevel: string[] = [];
+  readonly skippedTopLevel: Array<{ name: string; reason: string }> = [];
+  private readonly ctx: MirrorContext;
+
+  constructor(ctx: MirrorContext) {
+    this.ctx = ctx;
+  }
+
+  async walk(
+    src: string,
+    dest: string,
+    rel: string,
+    chain: IgnoreLayer[],
+    ancestors: string[],
+    isTopLevel: boolean,
+  ): Promise<void> {
+    const localChain = await maybeAddLocalIgnore(chain, src, rel);
+
+    let entries;
+    try {
+      entries = await readdir(src, { withFileTypes: true });
+    } catch (err) {
+      // Directory disappeared between caller's check and now; nothing to mirror.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    for (const entry of entries) {
+      await this.handleEntry(entry.name, src, dest, rel, localChain, ancestors, isTopLevel);
+    }
+  }
+
+  private async handleEntry(
+    name: string,
+    src: string,
+    dest: string,
+    parentRel: string,
+    chain: IgnoreLayer[],
+    ancestors: string[],
+    isTopLevel: boolean,
+  ): Promise<void> {
+    const rel = parentRel ? `${parentRel}/${name}` : name;
+
+    if (HARD_EXCLUDED.has(name)) {
+      this.recordSkip(isTopLevel, name, 'hard-excluded');
+      return;
+    }
+
+    if (isTopLevel) {
+      if (this.ctx.variantConflictTop && name === this.ctx.variantConflictTop) {
+        this.recordSkip(isTopLevel, name, 'variant conflict');
+        return;
+      }
+      if (this.isStorageRootDescendant(name)) {
+        this.recordSkip(isTopLevel, name, 'storage root');
+        return;
+      }
+    }
+
+    const source = join(src, name);
+    const classified = await classifyEntry(source, this.ctx.cwdReal, ancestors);
+    if (classified.kind === 'gone') return;
+    if (classified.kind === 'rejected') {
+      this.recordSkip(isTopLevel, name, classified.reason);
+      return;
+    }
+
+    if (matchesIgnoreChain(chain, rel, classified.isDir)) {
+      this.recordSkip(isTopLevel, name, 'gitignored');
+      return;
+    }
+
+    if (classified.isDir) {
+      const subDest = join(dest, name);
+      await ensureDir(subDest);
+      const nextAncestors =
+        classified.realTarget !== null ? [...ancestors, classified.realTarget] : ancestors;
+      await this.walk(classified.realTarget ?? source, subDest, rel, chain, nextAncestors, false);
+      this.recordMirror(isTopLevel, name);
+    } else if (classified.isFile) {
+      // Symlink the file itself. For symlink-to-file entries we point at the
+      // realpath rather than re-creating an indirect chain — the realpath was
+      // already verified to be inside cwd above.
+      await symlink(classified.realTarget ?? source, join(dest, name));
+      this.recordMirror(isTopLevel, name);
+    } else {
+      this.recordSkip(isTopLevel, name, 'unsupported file type');
+    }
+  }
+
+  private recordSkip(isTopLevel: boolean, name: string, reason: string): void {
+    if (isTopLevel) this.skippedTopLevel.push({ name, reason });
+  }
+
+  private recordMirror(isTopLevel: boolean, name: string): void {
+    if (isTopLevel) this.mirroredTopLevel.push(name);
+  }
+
+  private isStorageRootDescendant(topEntryName: string): boolean {
+    const candidate = resolve(this.ctx.cwd, topEntryName);
+    return (
+      candidate === this.ctx.storageRootResolved ||
+      this.ctx.storageRootResolved.startsWith(candidate + sep)
+    );
+  }
+}
+
+type Classified =
+  | { kind: 'ok'; isDir: boolean; isFile: boolean; realTarget: string | null }
+  | { kind: 'rejected'; reason: string }
+  | { kind: 'gone' };
+
+/**
+ * Inspect an entry's stat/symlink state and validate it against the sandbox
+ * boundary. Symlinks whose target escapes cwd or forms a cycle with an
+ * ancestor on the current walk path are rejected. Dangling/loop symlinks are
+ * rejected with a specific reason. Non-symlinks pass through unchanged.
+ */
+async function classifyEntry(
+  source: string,
+  cwdReal: string,
+  ancestors: string[],
+): Promise<Classified> {
+  let lst;
+  try {
+    lst = await lstat(source);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'gone' };
+    throw err;
+  }
+
+  if (!lst.isSymbolicLink()) {
+    return { kind: 'ok', isDir: lst.isDirectory(), isFile: lst.isFile(), realTarget: null };
+  }
+
+  let realTarget: string;
+  try {
+    realTarget = await realpath(source);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { kind: 'rejected', reason: 'dangling symlink' };
+    if (code === 'ELOOP') return { kind: 'rejected', reason: 'symlink loop' };
+    throw err;
+  }
+
+  if (realTarget !== cwdReal && !realTarget.startsWith(cwdReal + sep)) {
+    return { kind: 'rejected', reason: 'symlink escapes cwd' };
+  }
+  if (ancestors.includes(realTarget)) {
+    return { kind: 'rejected', reason: 'symlink cycle' };
+  }
+
+  let tStat;
+  try {
+    tStat = await lstat(realTarget);
+  } catch {
+    return { kind: 'gone' };
+  }
+  return { kind: 'ok', isDir: tStat.isDirectory(), isFile: tStat.isFile(), realTarget };
+}
 
 function conflictTopLevel(variantType: VariantType): string | null {
   if (variantType === 'CLAUDE.md') return 'CLAUDE.md';
@@ -134,24 +289,64 @@ function conflictTopLevel(variantType: VariantType): string | null {
   return null;
 }
 
-function isStorageRootDescendant(cwd: string, topEntryName: string, storageRoot: string): boolean {
-  const candidate = resolve(cwd, topEntryName);
-  const storageRootResolved = resolve(storageRoot);
-  return candidate === storageRootResolved || storageRootResolved.startsWith(candidate + '/');
-}
-
-async function loadRootGitignore(cwd: string): Promise<Ignore> {
-  const ig = ignore();
-  const gitignorePath = join(cwd, '.gitignore');
-  try {
-    const raw = await readFile(gitignorePath, 'utf8');
-    ig.add(raw);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn('sandbox.gitignore-read-failed', { error: (err as Error).message });
+async function loadGlobalGitignore(): Promise<Ignore | null> {
+  // Honor the most common locations git uses for the global excludes file.
+  // We don't shell out to git config, but $XDG_CONFIG_HOME and ~/.config/git
+  // cover the typical setup.
+  const candidates: string[] = [];
+  if (process.env.XDG_CONFIG_HOME) {
+    candidates.push(join(process.env.XDG_CONFIG_HOME, 'git', 'ignore'));
+  }
+  candidates.push(join(homedir(), '.config', 'git', 'ignore'));
+  for (const path of candidates) {
+    try {
+      const raw = await readFile(path, 'utf8');
+      if (raw.trim() === '') return null;
+      return ignore().add(raw);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      log.warn('sandbox.global-gitignore-read-failed', { path, error: (err as Error).message });
+      return null;
     }
   }
-  return ig;
+  return null;
+}
+
+async function maybeAddLocalIgnore(
+  chain: IgnoreLayer[],
+  dir: string,
+  prefix: string,
+): Promise<IgnoreLayer[]> {
+  // Skip the root: we've already loaded `<cwd>/.gitignore` upfront and put it
+  // at the head of the chain.
+  if (prefix === '') return chain;
+  const local = await loadGitignore(dir);
+  if (!local) return chain;
+  return [...chain, { prefix, ig: local }];
+}
+
+/**
+ * Match an entry against the layered ignore chain. Each layer's rules apply
+ * to paths under its `prefix`, expressed relative to that prefix — the same
+ * way git evaluates a per-directory `.gitignore`.
+ */
+function matchesIgnoreChain(chain: IgnoreLayer[], relPath: string, isDir: boolean): boolean {
+  const tail = isDir ? `${relPath}/` : relPath;
+  for (const layer of chain) {
+    let relToLayer: string;
+    if (layer.prefix === '') {
+      relToLayer = tail;
+    } else if (relPath === layer.prefix) {
+      // A nested .gitignore can't ignore the directory it's anchored at.
+      continue;
+    } else if (relPath.startsWith(layer.prefix + '/')) {
+      relToLayer = tail.slice(layer.prefix.length + 1);
+    } else {
+      continue;
+    }
+    if (layer.ig.ignores(relToLayer)) return true;
+  }
+  return false;
 }
 
 async function placeVariant(projectDir: string, input: SandboxInput): Promise<void> {

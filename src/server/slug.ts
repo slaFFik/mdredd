@@ -8,14 +8,14 @@ import { log } from './log.js';
 const MAX_SLUG_LENGTH = 32;
 
 export interface SlugInput {
-  explicitName: string;            // user-entered variant name; empty string means auto-generate
-  variantContent: string;          // current variant content (used for hashing + Haiku input)
+  explicitName: string; // user-entered variant name; empty string means auto-generate
+  variantContent: string; // current variant content (used for hashing + Haiku input)
   claudeBin: string;
   now?: Date;
 }
 
 export interface SlugResult {
-  folderName: string;              // <timestamp>-<slug-base>-<hash>
+  folderName: string; // <timestamp>-<slug-base>-<hash>
   slugBase: string;
   contentHash: string;
   timestamp: string;
@@ -102,9 +102,7 @@ export async function listRunFolderNames(storageRoot: string): Promise<Set<strin
   if (!(await pathExists(storageRoot))) return new Set();
   const entries = await readdir(storageRoot, { withFileTypes: true });
   return new Set(
-    entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-      .map((e) => e.name),
+    entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name),
   );
 }
 

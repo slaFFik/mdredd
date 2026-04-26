@@ -16,12 +16,12 @@ import { log } from './log.js';
 
 export interface SessionSnapshot {
   session: SessionFile;
-  runs: Record<string, RunBundle>;      // keyed by runFolder (not column id)
+  runs: Record<string, RunBundle>; // keyed by runFolder (not column id)
 }
 
 export interface RunBundle {
   config: RunConfig;
-  transcript: TranscriptFile | null;    // may be absent for in-flight (preparing) at boot
+  transcript: TranscriptFile | null; // may be absent for in-flight (preparing) at boot
   judge: JudgeFile | null;
   outputs: Array<{ path: string; bytes: number }>;
 }

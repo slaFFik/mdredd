@@ -14,8 +14,7 @@ function captureStderr(): { lines: string[]; restore: () => void } {
   const orig = process.stderr.write.bind(process.stderr);
   // Cast through unknown to satisfy the overloaded write signature.
   const tap = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
-    const text =
-      typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
     lines.push(text);
     return (orig as unknown as (...args: unknown[]) => boolean)(chunk, ...rest);
   }) as unknown as typeof process.stderr.write;
@@ -135,7 +134,8 @@ await scenario('turn cap: many-turns scenario trips at cap', async () => {
     await runner.start();
     const final = await runner.wait();
     if (final.status !== 'truncated') throw new Error(`expected truncated, got ${final.status}`);
-    if (final.truncationReason !== 'turns') throw new Error(`expected turns reason, got ${final.truncationReason}`);
+    if (final.truncationReason !== 'turns')
+      throw new Error(`expected turns reason, got ${final.truncationReason}`);
   });
 });
 
@@ -156,7 +156,8 @@ await scenario('wallclock cap: long-running scenario trips', async () => {
     await runner.start();
     const final = await runner.wait();
     if (final.status !== 'truncated') throw new Error(`expected truncated, got ${final.status}`);
-    if (final.truncationReason !== 'wallclock') throw new Error(`expected wallclock, got ${final.truncationReason}`);
+    if (final.truncationReason !== 'wallclock')
+      throw new Error(`expected wallclock, got ${final.truncationReason}`);
   });
 });
 
@@ -279,17 +280,22 @@ await scenario('parallel tool calls: pairing by tool_use_id', async () => {
     const uses = transcript.events.filter((e) => e.t === 'toolUse');
     const results = transcript.events.filter((e) => e.t === 'toolResult');
     if (uses.length !== 2) throw new Error(`expected 2 toolUse events, got ${uses.length}`);
-    if (results.length !== 2) throw new Error(`expected 2 toolResult events, got ${results.length}`);
+    if (results.length !== 2)
+      throw new Error(`expected 2 toolResult events, got ${results.length}`);
     if (uses[0]!.id !== 'tu-0' || uses[1]!.id !== 'tu-1') {
       throw new Error(`toolUse ids: ${uses.map((u) => u.id).join(',')}`);
     }
     // Results arrive in reverse order (tu-1 before tu-0). Each must be paired
     // back to its tool_use by id, NOT to the most recent tool_use start.
     if (results[0]!.id !== 'tu-1' || results[0]!.tool !== 'Grep') {
-      throw new Error(`first result wrongly attributed: id=${results[0]!.id} tool=${results[0]!.tool}`);
+      throw new Error(
+        `first result wrongly attributed: id=${results[0]!.id} tool=${results[0]!.tool}`,
+      );
     }
     if (results[1]!.id !== 'tu-0' || results[1]!.tool !== 'Glob') {
-      throw new Error(`second result wrongly attributed: id=${results[1]!.id} tool=${results[1]!.tool}`);
+      throw new Error(
+        `second result wrongly attributed: id=${results[1]!.id} tool=${results[1]!.tool}`,
+      );
     }
     // Bodies match the right tool, not swapped.
     if (!results[0]!.resultSummary?.includes('grep result')) {
@@ -307,7 +313,10 @@ await scenario('parallel runs: stats are isolated per run', async () => {
     mkdtemp(join(tmpdir(), 'mdredd-smoke-cwd-')),
   ]);
   try {
-    const makeInput = (cwd: string, name: string): Promise<{
+    const makeInput = (
+      cwd: string,
+      name: string,
+    ): Promise<{
       runDir: string;
       projectDir: string;
       outputsDir: string;
@@ -410,7 +419,9 @@ await scenario('parallel runs: stats are isolated per run', async () => {
     const cfgA = JSON.parse(await readFile(join(inputA.runDir, 'config.json'), 'utf8'));
     const cfgB = JSON.parse(await readFile(join(inputB.runDir, 'config.json'), 'utf8'));
     if (cfgA.turnCount !== 2 || cfgB.turnCount !== 7) {
-      throw new Error(`on-disk config: A.turnCount=${cfgA.turnCount}, B.turnCount=${cfgB.turnCount}`);
+      throw new Error(
+        `on-disk config: A.turnCount=${cfgA.turnCount}, B.turnCount=${cfgB.turnCount}`,
+      );
     }
     if (cfgA.wallClockMs === cfgB.wallClockMs) {
       throw new Error('on-disk wallClockMs identical — suspicious');
@@ -544,223 +555,144 @@ await scenario('init context safe: no warn when auto-memory is inside the run di
   });
 });
 
-await scenario('runManager.stopAll: terminates active runners and persists cancelled transcripts', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-stopall-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
-  const savedDelay = process.env.FAKE_CLAUDE_DELAY_MS;
-  // Long-running fake; SIGTERM during the initial sleep cancels mid-stream so
-  // the runner has to follow the cancelled finalize path (issue #6 main risk).
-  process.env.FAKE_CLAUDE_SCENARIO = 'long';
-  process.env.FAKE_CLAUDE_DELAY_MS = '5000';
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    await session.mutate((s) => {
-      for (const [i, col] of s.columns.entries()) {
-        col.variantName = `stopall-var-${i}`; // explicit name skips the haiku slug spawn
-        col.variantContent = `# variant ${i}\n`;
-        col.prompt = `do thing ${i}`;
+await scenario(
+  'runManager.stopAll: terminates active runners and persists cancelled transcripts',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-stopall-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+    const savedDelay = process.env.FAKE_CLAUDE_DELAY_MS;
+    // Long-running fake; SIGTERM during the initial sleep cancels mid-stream so
+    // the runner has to follow the cancelled finalize path (issue #6 main risk).
+    process.env.FAKE_CLAUDE_SCENARIO = 'long';
+    process.env.FAKE_CLAUDE_DELAY_MS = '5000';
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      await session.mutate((s) => {
+        for (const [i, col] of s.columns.entries()) {
+          col.variantName = `stopall-var-${i}`; // explicit name skips the haiku slug spawn
+          col.variantContent = `# variant ${i}\n`;
+          col.prompt = `do thing ${i}`;
+        }
+      });
+      const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await runManager.init();
+
+      const cfg1 = await runManager.startColumn('col-1');
+      const cfg2 = await runManager.startColumn('col-2');
+      if (runManager.activeCount() !== 2) {
+        throw new Error(`expected 2 active runners, got ${runManager.activeCount()}`);
       }
-    });
-    const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
-    await runManager.init();
 
-    const cfg1 = await runManager.startColumn('col-1');
-    const cfg2 = await runManager.startColumn('col-2');
-    if (runManager.activeCount() !== 2) {
-      throw new Error(`expected 2 active runners, got ${runManager.activeCount()}`);
-    }
-
-    const result = await runManager.stopAll(5_000);
-    if (result.timedOut) throw new Error('stopAll should not have timed out');
-    if (result.stopped !== 2) throw new Error(`expected stopped=2, got ${result.stopped}`);
-    if (runManager.activeCount() !== 0) {
-      throw new Error(`expected 0 active after stopAll, got ${runManager.activeCount()}`);
-    }
-
-    for (const cfg of [cfg1, cfg2]) {
-      const txRaw = await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8');
-      const tx = JSON.parse(txRaw) as { status: string };
-      if (tx.status !== 'cancelled') {
-        throw new Error(`transcript ${cfg.runFolder}: expected cancelled, got ${tx.status}`);
+      const result = await runManager.stopAll(5_000);
+      if (result.timedOut) throw new Error('stopAll should not have timed out');
+      if (result.stopped !== 2) throw new Error(`expected stopped=2, got ${result.stopped}`);
+      if (runManager.activeCount() !== 0) {
+        throw new Error(`expected 0 active after stopAll, got ${runManager.activeCount()}`);
       }
-    }
 
-    // Idempotent: a second stopAll on a drained manager is a no-op.
-    const second = await runManager.stopAll(1_000);
-    if (second.stopped !== 0 || second.timedOut) {
-      throw new Error(`second stopAll mismatch: ${JSON.stringify(second)}`);
+      for (const cfg of [cfg1, cfg2]) {
+        const txRaw = await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8');
+        const tx = JSON.parse(txRaw) as { status: string };
+        if (tx.status !== 'cancelled') {
+          throw new Error(`transcript ${cfg.runFolder}: expected cancelled, got ${tx.status}`);
+        }
+      }
+
+      // Idempotent: a second stopAll on a drained manager is a no-op.
+      const second = await runManager.stopAll(1_000);
+      if (second.stopped !== 0 || second.timedOut) {
+        throw new Error(`second stopAll mismatch: ${JSON.stringify(second)}`);
+      }
+    } finally {
+      if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+      else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+      if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
+      else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
+      await rm(cwd, { recursive: true, force: true });
     }
-  } finally {
-    if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
-    else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
-    if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
-    else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 await scenario('transcript.ndjson: events are appended incrementally during the run', async () => {
-  await withSandbox('ndjson-incremental', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
-    const runner = new Runner({
-      claudeBin: fakeBin,
-      projectDir,
-      runDir,
-      outputsDir,
-      prompt: 'go',
-      model: 'haiku',
-      mode: 'read-only',
-      caps: { turns: 100, wallClockMs: 30_000 },
-      initialConfig,
-      env: {
-        ...process.env,
-        FAKE_CLAUDE_SCENARIO: 'many-turns',
-        FAKE_CLAUDE_TURNS: '4',
-        FAKE_CLAUDE_PER_TURN_DELAY_MS: '80',
-      },
-    });
-    await runner.start();
-    // Sample the on-disk ndjson while the run is still in flight. The fake's
-    // per-turn delay gives the writer time to flush at least one normalized
-    // event before we read.
-    let mid = '';
-    for (let i = 0; i < 25; i++) {
-      await new Promise((r) => setTimeout(r, 40));
-      mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
-      if (mid.split('\n').filter((l) => l.trim()).length >= 1) break;
-    }
-    const midLines = mid.split('\n').filter((l) => l.trim());
-    if (midLines.length === 0) {
-      throw new Error('no events appeared in transcript.ndjson before run end');
-    }
-    for (const line of midLines) {
-      JSON.parse(line); // each line must be valid JSON
-    }
-    const final = await runner.wait();
-    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
-    const fullRaw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
-    const fullLines = fullRaw.split('\n').filter((l) => l.trim());
-    if (fullLines.length < midLines.length) {
-      throw new Error(`final ndjson shorter than mid-run sample: ${fullLines.length} < ${midLines.length}`);
-    }
-    const turns = fullLines.map((l) => JSON.parse(l) as { t: string }).filter((e) => e.t === 'turn');
-    if (turns.length !== 4) {
-      throw new Error(`expected 4 turn events in ndjson, got ${turns.length}`);
-    }
-    // Final transcript.json must agree with the ndjson stream (issue #10).
-    const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
-      events: Array<{ t: string }>;
-    };
-    if (transcript.events.length !== fullLines.length) {
-      throw new Error(
-        `transcript.json events (${transcript.events.length}) != ndjson lines (${fullLines.length})`,
-      );
-    }
-  });
+  await withSandbox(
+    'ndjson-incremental',
+    async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'go',
+        model: 'haiku',
+        mode: 'read-only',
+        caps: { turns: 100, wallClockMs: 30_000 },
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'many-turns',
+          FAKE_CLAUDE_TURNS: '4',
+          FAKE_CLAUDE_PER_TURN_DELAY_MS: '80',
+        },
+      });
+      await runner.start();
+      // Sample the on-disk ndjson while the run is still in flight. The fake's
+      // per-turn delay gives the writer time to flush at least one normalized
+      // event before we read.
+      let mid = '';
+      for (let i = 0; i < 25; i++) {
+        await new Promise((r) => setTimeout(r, 40));
+        mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
+        if (mid.split('\n').filter((l) => l.trim()).length >= 1) break;
+      }
+      const midLines = mid.split('\n').filter((l) => l.trim());
+      if (midLines.length === 0) {
+        throw new Error('no events appeared in transcript.ndjson before run end');
+      }
+      for (const line of midLines) {
+        JSON.parse(line); // each line must be valid JSON
+      }
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const fullRaw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
+      const fullLines = fullRaw.split('\n').filter((l) => l.trim());
+      if (fullLines.length < midLines.length) {
+        throw new Error(
+          `final ndjson shorter than mid-run sample: ${fullLines.length} < ${midLines.length}`,
+        );
+      }
+      const turns = fullLines
+        .map((l) => JSON.parse(l) as { t: string })
+        .filter((e) => e.t === 'turn');
+      if (turns.length !== 4) {
+        throw new Error(`expected 4 turn events in ndjson, got ${turns.length}`);
+      }
+      // Final transcript.json must agree with the ndjson stream (issue #10).
+      const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
+        events: Array<{ t: string }>;
+      };
+      if (transcript.events.length !== fullLines.length) {
+        throw new Error(
+          `transcript.json events (${transcript.events.length}) != ndjson lines (${fullLines.length})`,
+        );
+      }
+    },
+  );
 });
 
-await scenario('readRunBundle: replays partial transcript from ndjson when transcript.json missing', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-partial-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    const runFolder = `run-partial-${Date.now()}`;
-    const runDir = join(storageRoot, runFolder);
-    const config: RunConfig = {
-      runFolder,
-      columnId: 'col-1',
-      variantName: 'partial',
-      variantType: 'CLAUDE.md',
-      skillOrAgentName: null,
-      variantContentSha256: '',
-      promptSha256: '',
-      prompt: 'p',
-      model: 'haiku',
-      mode: 'read-only',
-      status: 'streaming',
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      turnCount: 1,
-      wallClockMs: 0,
-      truncationReason: null,
-      exitCode: null,
-      signal: null,
-      errorMessage: null,
-      toolAllowlist: [],
-      caps: { turns: 50, wallClockMs: 30_000 },
-    };
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(runDir, { recursive: true });
-    await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
-    // Two valid lines + one torn (trailing partial) line — readPartialTranscript
-    // tolerates the torn last line and returns the parseable prefix.
-    const lines = [
-      JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),
-      JSON.stringify({ t: 'message', role: 'assistant', content: 'hi', ts: Date.now() }),
-      '{"t":"partial","chunk":"abc',
-    ];
-    await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
-
-    const bundle = await session.readRunBundle(runFolder);
-    if (!bundle) throw new Error('expected bundle, got null');
-    if (!bundle.transcript) throw new Error('expected partial transcript, got null');
-    if (bundle.transcript.events.length !== 2) {
-      throw new Error(`expected 2 parseable events, got ${bundle.transcript.events.length}`);
-    }
-    if (bundle.transcript.status !== 'streaming') {
-      throw new Error(`expected status streaming (from config), got ${bundle.transcript.status}`);
-    }
-    if (bundle.transcript.runFolder !== runFolder) {
-      throw new Error(`runFolder mismatch: ${bundle.transcript.runFolder}`);
-    }
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-await scenario('runManager.init: bumps seq past ring-buffer to avoid Last-Event-ID collisions', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    await writeFile(join(storageRoot, '.seq'), JSON.stringify({ seq: 100 }));
-    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
-    await rm1.init();
-    // emitHeartbeat is the only public way to allocate a seq; capture it via subscribe.
-    let observed = -1;
-    rm1.subscribe({
-      lastEventId: 0,
-      onEvent: (e) => {
-        if (observed < 0) observed = e.seq;
-      },
-      onClose: () => {},
-    });
-    rm1.emitHeartbeat();
-    if (observed <= 100 + 100) {
-      // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
-      throw new Error(`seq did not advance past ring buffer: first emit seq=${observed}`);
-    }
-    if (observed !== 100 + 2000 + 1) {
-      throw new Error(`expected first emit seq=2101, got ${observed}`);
-    }
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-await scenario('runManager.init: reaps stale preparing/streaming runs from a previous boot', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-reap-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    const { mkdir } = await import('node:fs/promises');
-    const makeStaleRun = async (name: string, status: 'preparing' | 'streaming' | 'completed'): Promise<RunConfig> => {
-      const runDir = join(storageRoot, name);
-      await mkdir(runDir, { recursive: true });
+await scenario(
+  'readRunBundle: replays partial transcript from ndjson when transcript.json missing',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-partial-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const runFolder = `run-partial-${Date.now()}`;
+      const runDir = join(storageRoot, runFolder);
       const config: RunConfig = {
-        runFolder: name,
+        runFolder,
         columnId: 'col-1',
-        variantName: name,
+        variantName: 'partial',
         variantType: 'CLAUDE.md',
         skillOrAgentName: null,
         variantContentSha256: '',
@@ -768,9 +700,207 @@ await scenario('runManager.init: reaps stale preparing/streaming runs from a pre
         prompt: 'p',
         model: 'haiku',
         mode: 'read-only',
-        status,
+        status: 'streaming',
         startedAt: new Date().toISOString(),
-        endedAt: status === 'completed' ? new Date().toISOString() : null,
+        endedAt: null,
+        turnCount: 1,
+        wallClockMs: 0,
+        truncationReason: null,
+        exitCode: null,
+        signal: null,
+        errorMessage: null,
+        toolAllowlist: [],
+        caps: { turns: 50, wallClockMs: 30_000 },
+      };
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+      // Two valid lines + one torn (trailing partial) line — readPartialTranscript
+      // tolerates the torn last line and returns the parseable prefix.
+      const lines = [
+        JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),
+        JSON.stringify({ t: 'message', role: 'assistant', content: 'hi', ts: Date.now() }),
+        '{"t":"partial","chunk":"abc',
+      ];
+      await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
+
+      const bundle = await session.readRunBundle(runFolder);
+      if (!bundle) throw new Error('expected bundle, got null');
+      if (!bundle.transcript) throw new Error('expected partial transcript, got null');
+      if (bundle.transcript.events.length !== 2) {
+        throw new Error(`expected 2 parseable events, got ${bundle.transcript.events.length}`);
+      }
+      if (bundle.transcript.status !== 'streaming') {
+        throw new Error(`expected status streaming (from config), got ${bundle.transcript.status}`);
+      }
+      if (bundle.transcript.runFolder !== runFolder) {
+        throw new Error(`runFolder mismatch: ${bundle.transcript.runFolder}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.init: bumps seq past ring-buffer to avoid Last-Event-ID collisions',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      await writeFile(join(storageRoot, '.seq'), JSON.stringify({ seq: 100 }));
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init();
+      // emitHeartbeat is the only public way to allocate a seq; capture it via subscribe.
+      let observed = -1;
+      rm1.subscribe({
+        lastEventId: 0,
+        onEvent: (e) => {
+          if (observed < 0) observed = e.seq;
+        },
+        onClose: () => {},
+      });
+      rm1.emitHeartbeat();
+      if (observed <= 100 + 100) {
+        // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
+        throw new Error(`seq did not advance past ring buffer: first emit seq=${observed}`);
+      }
+      if (observed !== 100 + 2000 + 1) {
+        throw new Error(`expected first emit seq=2101, got ${observed}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.init: reaps stale preparing/streaming runs from a previous boot',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-reap-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const { mkdir } = await import('node:fs/promises');
+      const makeStaleRun = async (
+        name: string,
+        status: 'preparing' | 'streaming' | 'completed',
+      ): Promise<RunConfig> => {
+        const runDir = join(storageRoot, name);
+        await mkdir(runDir, { recursive: true });
+        const config: RunConfig = {
+          runFolder: name,
+          columnId: 'col-1',
+          variantName: name,
+          variantType: 'CLAUDE.md',
+          skillOrAgentName: null,
+          variantContentSha256: '',
+          promptSha256: '',
+          prompt: 'p',
+          model: 'haiku',
+          mode: 'read-only',
+          status,
+          startedAt: new Date().toISOString(),
+          endedAt: status === 'completed' ? new Date().toISOString() : null,
+          turnCount: 0,
+          wallClockMs: 0,
+          truncationReason: null,
+          exitCode: null,
+          signal: null,
+          errorMessage: null,
+          toolAllowlist: [],
+          caps: { turns: 50, wallClockMs: 30_000 },
+        };
+        await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+        return config;
+      };
+      await makeStaleRun('run-prep', 'preparing');
+      await makeStaleRun('run-stream', 'streaming');
+      await makeStaleRun('run-done', 'completed');
+
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init();
+
+      const prep = JSON.parse(await readFile(join(storageRoot, 'run-prep', 'config.json'), 'utf8'));
+      const stream = JSON.parse(
+        await readFile(join(storageRoot, 'run-stream', 'config.json'), 'utf8'),
+      );
+      const done = JSON.parse(await readFile(join(storageRoot, 'run-done', 'config.json'), 'utf8'));
+
+      if (prep.status !== 'errored')
+        throw new Error(`expected run-prep errored, got ${prep.status}`);
+      if (prep.errorMessage !== 'harness exited mid-run') {
+        throw new Error(`expected harness-exited message, got ${prep.errorMessage}`);
+      }
+      if (!prep.endedAt) throw new Error('expected endedAt to be set on reaped run');
+      if (stream.status !== 'errored')
+        throw new Error(`expected run-stream errored, got ${stream.status}`);
+      // Terminal runs are NOT touched by the reaper.
+      if (done.status !== 'completed')
+        throw new Error(`expected run-done untouched, got ${done.status}`);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'runManager.emit: debounced .seq persistence catches up after the burst',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-debounce-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await rm1.init(); // seq is now RING_BUFFER_LIMIT
+      // Burst of heartbeats — each one schedules a (debounced) .seq write.
+      for (let i = 0; i < 30; i++) rm1.emitHeartbeat();
+      // Quiesce: poll until on-disk seq matches the expected post-burst value.
+      const expectedSeq = 2000 + 30;
+      let onDisk = -1;
+      for (let i = 0; i < 50; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        const persisted = JSON.parse(
+          await readFile(join(storageRoot, '.seq'), 'utf8').catch(() => '{"seq":-1}'),
+        ) as { seq: number };
+        onDisk = persisted.seq;
+        if (onDisk === expectedSeq) break;
+      }
+      if (onDisk !== expectedSeq) {
+        throw new Error(`expected .seq=${expectedSeq} on disk, got ${onDisk}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
+await scenario(
+  'readPartialTranscript: drops schema-invalid lines but keeps the valid prefix',
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-ndjson-validate-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      const runFolder = `run-validate-${Date.now()}`;
+      const runDir = join(storageRoot, runFolder);
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(runDir, { recursive: true });
+      const config: RunConfig = {
+        runFolder,
+        columnId: 'col-1',
+        variantName: 'validate',
+        variantType: 'CLAUDE.md',
+        skillOrAgentName: null,
+        variantContentSha256: '',
+        promptSha256: '',
+        prompt: 'p',
+        model: 'haiku',
+        mode: 'read-only',
+        status: 'streaming',
+        startedAt: new Date().toISOString(),
+        endedAt: null,
         turnCount: 0,
         wallClockMs: 0,
         truncationReason: null,
@@ -781,113 +911,29 @@ await scenario('runManager.init: reaps stale preparing/streaming runs from a pre
         caps: { turns: 50, wallClockMs: 30_000 },
       };
       await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
-      return config;
-    };
-    await makeStaleRun('run-prep', 'preparing');
-    await makeStaleRun('run-stream', 'streaming');
-    await makeStaleRun('run-done', 'completed');
+      const lines = [
+        JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }), // valid
+        JSON.stringify({ t: 'unknown-future-event', ts: Date.now() }), // schema-invalid
+        JSON.stringify({ t: 'message', role: 'assistant', content: 'ok', ts: Date.now() }), // valid
+        JSON.stringify({ t: 'turn', turn: 'oops', ts: Date.now() }), // wrong type, schema-invalid
+      ];
+      await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
 
-    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
-    await rm1.init();
-
-    const prep = JSON.parse(await readFile(join(storageRoot, 'run-prep', 'config.json'), 'utf8'));
-    const stream = JSON.parse(await readFile(join(storageRoot, 'run-stream', 'config.json'), 'utf8'));
-    const done = JSON.parse(await readFile(join(storageRoot, 'run-done', 'config.json'), 'utf8'));
-
-    if (prep.status !== 'errored') throw new Error(`expected run-prep errored, got ${prep.status}`);
-    if (prep.errorMessage !== 'harness exited mid-run') {
-      throw new Error(`expected harness-exited message, got ${prep.errorMessage}`);
+      const bundle = await session.readRunBundle(runFolder);
+      if (!bundle?.transcript) throw new Error('expected partial transcript');
+      if (bundle.transcript.events.length !== 2) {
+        throw new Error(
+          `expected 2 valid events after schema filter, got ${bundle.transcript.events.length}`,
+        );
+      }
+      const kinds = bundle.transcript.events.map((e) => e.t);
+      if (kinds.join(',') !== 'turn,message') {
+        throw new Error(`unexpected event kinds: ${kinds.join(',')}`);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
     }
-    if (!prep.endedAt) throw new Error('expected endedAt to be set on reaped run');
-    if (stream.status !== 'errored') throw new Error(`expected run-stream errored, got ${stream.status}`);
-    // Terminal runs are NOT touched by the reaper.
-    if (done.status !== 'completed') throw new Error(`expected run-done untouched, got ${done.status}`);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-await scenario('runManager.emit: debounced .seq persistence catches up after the burst', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-debounce-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
-    await rm1.init(); // seq is now RING_BUFFER_LIMIT
-    // Burst of heartbeats — each one schedules a (debounced) .seq write.
-    for (let i = 0; i < 30; i++) rm1.emitHeartbeat();
-    // Quiesce: poll until on-disk seq matches the expected post-burst value.
-    const expectedSeq = 2000 + 30;
-    let onDisk = -1;
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 20));
-      const persisted = JSON.parse(
-        await readFile(join(storageRoot, '.seq'), 'utf8').catch(() => '{"seq":-1}'),
-      ) as { seq: number };
-      onDisk = persisted.seq;
-      if (onDisk === expectedSeq) break;
-    }
-    if (onDisk !== expectedSeq) {
-      throw new Error(`expected .seq=${expectedSeq} on disk, got ${onDisk}`);
-    }
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-await scenario('readPartialTranscript: drops schema-invalid lines but keeps the valid prefix', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-ndjson-validate-'));
-  const storageRoot = join(cwd, 'agents', 'mdredd');
-  try {
-    const session = await SessionStore.load(storageRoot, cwd);
-    const runFolder = `run-validate-${Date.now()}`;
-    const runDir = join(storageRoot, runFolder);
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(runDir, { recursive: true });
-    const config: RunConfig = {
-      runFolder,
-      columnId: 'col-1',
-      variantName: 'validate',
-      variantType: 'CLAUDE.md',
-      skillOrAgentName: null,
-      variantContentSha256: '',
-      promptSha256: '',
-      prompt: 'p',
-      model: 'haiku',
-      mode: 'read-only',
-      status: 'streaming',
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      turnCount: 0,
-      wallClockMs: 0,
-      truncationReason: null,
-      exitCode: null,
-      signal: null,
-      errorMessage: null,
-      toolAllowlist: [],
-      caps: { turns: 50, wallClockMs: 30_000 },
-    };
-    await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
-    const lines = [
-      JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),         // valid
-      JSON.stringify({ t: 'unknown-future-event', ts: Date.now() }),  // schema-invalid
-      JSON.stringify({ t: 'message', role: 'assistant', content: 'ok', ts: Date.now() }), // valid
-      JSON.stringify({ t: 'turn', turn: 'oops', ts: Date.now() }),    // wrong type, schema-invalid
-    ];
-    await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
-
-    const bundle = await session.readRunBundle(runFolder);
-    if (!bundle?.transcript) throw new Error('expected partial transcript');
-    if (bundle.transcript.events.length !== 2) {
-      throw new Error(`expected 2 valid events after schema filter, got ${bundle.transcript.events.length}`);
-    }
-    const kinds = bundle.transcript.events.map((e) => e.t);
-    if (kinds.join(',') !== 'turn,message') {
-      throw new Error(`unexpected event kinds: ${kinds.join(',')}`);
-    }
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 console.log('\nAll runner smoke scenarios passed.');

@@ -4,7 +4,12 @@ const threshold = LEVELS[LEVEL] ?? 20;
 
 function fmt(level: string, msg: string, fields?: Record<string, unknown>): string {
   const ts = new Date().toISOString();
-  const extras = fields ? ' ' + Object.entries(fields).map(([k, v]) => `${k}=${safe(v)}`).join(' ') : '';
+  const extras = fields
+    ? ' ' +
+      Object.entries(fields)
+        .map(([k, v]) => `${k}=${safe(v)}`)
+        .join(' ')
+    : '';
   return `${ts} ${level.padEnd(5)} ${msg}${extras}`;
 }
 
