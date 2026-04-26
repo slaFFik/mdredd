@@ -1,7 +1,6 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import ignore, { type Ignore } from 'ignore';
-import { resolveWithinBase } from './fsUtil.js';
+import { readdir, readFile, lstat, realpath, stat } from 'node:fs/promises';
+import { join, sep } from 'node:path';
+import { loadGitignore, realpathWithinBase } from './fsUtil.js';
 
 const SKIP_ALWAYS = new Set(['.git', '.DS_Store', 'node_modules']);
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -26,34 +25,63 @@ export interface FsReadResult {
 
 export async function listDir(cwd: string, relPath: string): Promise<FsListResult> {
   const safePath = normalizeRel(relPath);
-  const target = resolveWithinBase(cwd, safePath);
+  const cwdReal = await realpath(cwd);
+  // Resolve symlinks on the listing target itself: we won't list a directory
+  // whose realpath escapes cwd.
+  const target = await resolveSafe(cwd, safePath, cwdReal);
   const targetStat = await stat(target).catch((err) => {
     throw new FsBrowserError(err as Error, 'not-found');
   });
   if (!targetStat.isDirectory()) {
     throw new FsBrowserError(new Error(`not a directory: ${safePath}`), 'not-directory');
   }
-  const ig = await loadRootGitignore(cwd);
+  const ig = await loadGitignore(cwd);
   const raw = await readdir(target, { withFileTypes: true });
   const out: FsEntry[] = [];
   for (const e of raw) {
     if (SKIP_ALWAYS.has(e.name)) continue;
     const relEntry = safePath ? `${safePath}/${e.name}` : e.name;
     const matchPath = e.isDirectory() ? `${relEntry}/` : relEntry;
-    if (ig.ignores(matchPath)) continue;
-    let size = 0;
-    if (e.isFile()) {
+    if (ig?.ignores(matchPath)) continue;
+
+    const entryPath = join(target, e.name);
+    let lst;
+    try {
+      lst = await lstat(entryPath);
+    } catch {
+      continue;
+    }
+    if (lst.isSymbolicLink()) {
+      // Hide symlinks whose target escapes cwd — without this, `stat` below
+      // would report sizes for files outside the project.
+      let real;
       try {
-        const s = await stat(join(target, e.name));
-        size = s.size;
+        real = await realpath(entryPath);
       } catch {
-        // unreadable file — still show it, size 0
+        continue;
       }
+      if (real !== cwdReal && !real.startsWith(cwdReal + sep)) {
+        continue;
+      }
+    }
+
+    let size = 0;
+    let isDirectory = e.isDirectory();
+    if (lst.isSymbolicLink()) {
+      try {
+        const s = await stat(entryPath);
+        isDirectory = s.isDirectory();
+        if (s.isFile()) size = s.size;
+      } catch {
+        continue;
+      }
+    } else if (lst.isFile()) {
+      size = lst.size;
     }
     out.push({
       name: e.name,
       path: relEntry,
-      isDirectory: e.isDirectory(),
+      isDirectory,
       size,
     });
   }
@@ -66,7 +94,7 @@ export async function listDir(cwd: string, relPath: string): Promise<FsListResul
 
 export async function readFileCapped(cwd: string, relPath: string): Promise<FsReadResult> {
   const safePath = normalizeRel(relPath);
-  const target = resolveWithinBase(cwd, safePath);
+  const target = await resolveSafe(cwd, safePath);
   const s = await stat(target).catch((err) => {
     throw new FsBrowserError(err as Error, 'not-found');
   });
@@ -102,6 +130,21 @@ export class FsBrowserError extends Error {
   }
 }
 
+async function resolveSafe(cwd: string, safePath: string, baseReal?: string): Promise<string> {
+  try {
+    return await realpathWithinBase(cwd, safePath, baseReal);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new FsBrowserError(err as Error, 'not-found');
+    }
+    if (code === 'EESCAPE') {
+      throw new FsBrowserError(err as Error, 'symlink-escape');
+    }
+    throw err;
+  }
+}
+
 function normalizeRel(p: string): string {
   let s = (p ?? '').trim();
   if (s === '' || s === '/' || s === '.' || s === './') return '';
@@ -115,15 +158,4 @@ function normalizeRel(p: string): string {
     }
   }
   return s;
-}
-
-async function loadRootGitignore(cwd: string): Promise<Ignore> {
-  const ig = ignore();
-  try {
-    const raw = await readFile(join(cwd, '.gitignore'), 'utf8');
-    ig.add(raw);
-  } catch {
-    // no .gitignore — no filtering beyond SKIP_ALWAYS
-  }
-  return ig;
 }
