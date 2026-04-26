@@ -7,6 +7,7 @@
  *   FAKE_CLAUDE_SCENARIO=happy          (default)  — 1 turn, short text
  *   FAKE_CLAUDE_SCENARIO=many-turns     FAKE_CLAUDE_TURNS=N  — emit N turns
  *   FAKE_CLAUDE_SCENARIO=tool-use       — 1 turn with a tool call + result
+ *   FAKE_CLAUDE_SCENARIO=parallel-tool-use — 2 parallel tool_use blocks, results returned out of order
  *   FAKE_CLAUDE_SCENARIO=malformed      — inject one unparseable line mid-stream
  *   FAKE_CLAUDE_SCENARIO=auth-error     — non-zero exit + stderr auth error
  *   FAKE_CLAUDE_SCENARIO=long           FAKE_CLAUDE_DELAY_MS=N  — sleep N ms before any output
@@ -311,6 +312,23 @@ async function runToolUse() {
   emitResult({ numTurns: 1, result: 'read the file' });
 }
 
+// Two parallel tool_use blocks in one assistant message; results returned in
+// reverse order (Grep first, Glob second). Pairing is only correct when the
+// parser threads tool_use_id through to toolResult events. Issue #5.
+async function runParallelToolUse() {
+  emitSystemInit();
+  emitMessageStart();
+  emitToolUse('Glob', { pattern: '**/*.ts' }, 0); // tu-0
+  emitToolUse('Grep', { pattern: 'foo' }, 1);     // tu-1
+  emitMessageEnd('tool_use');
+  emitUserToolResult('tu-1', 'grep result body');
+  emitUserToolResult('tu-0', 'glob result body');
+  emitMessageStart();
+  emitTextBlock('searched');
+  emitMessageEnd('end_turn');
+  emitResult({ numTurns: 1, result: 'searched' });
+}
+
 async function runMalformed() {
   emitSystemInit();
   emitMessageStart();
@@ -402,6 +420,9 @@ async function main() {
         break;
       case 'tool-use':
         await runToolUse();
+        break;
+      case 'parallel-tool-use':
+        await runParallelToolUse();
         break;
       case 'malformed':
         await runMalformed();

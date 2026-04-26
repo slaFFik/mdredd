@@ -254,6 +254,51 @@ await scenario('tool-use does not count as a turn', async () => {
   });
 });
 
+await scenario('parallel tool calls: pairing by tool_use_id', async () => {
+  await withSandbox('parallel-tools', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const runner = new Runner({
+      claudeBin: fakeBin,
+      projectDir,
+      runDir,
+      outputsDir,
+      prompt: 'go',
+      model: 'haiku',
+      mode: 'read-only',
+      caps: { turns: 100, wallClockMs: 30_000 },
+      initialConfig,
+      env: { ...process.env, FAKE_CLAUDE_SCENARIO: 'parallel-tool-use' },
+    });
+    await runner.start();
+    const final = await runner.wait();
+    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+    const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
+      events: Array<{ t: string; id?: string; tool?: string; resultSummary?: string }>;
+    };
+    const uses = transcript.events.filter((e) => e.t === 'toolUse');
+    const results = transcript.events.filter((e) => e.t === 'toolResult');
+    if (uses.length !== 2) throw new Error(`expected 2 toolUse events, got ${uses.length}`);
+    if (results.length !== 2) throw new Error(`expected 2 toolResult events, got ${results.length}`);
+    if (uses[0]!.id !== 'tu-0' || uses[1]!.id !== 'tu-1') {
+      throw new Error(`toolUse ids: ${uses.map((u) => u.id).join(',')}`);
+    }
+    // Results arrive in reverse order (tu-1 before tu-0). Each must be paired
+    // back to its tool_use by id, NOT to the most recent tool_use start.
+    if (results[0]!.id !== 'tu-1' || results[0]!.tool !== 'Grep') {
+      throw new Error(`first result wrongly attributed: id=${results[0]!.id} tool=${results[0]!.tool}`);
+    }
+    if (results[1]!.id !== 'tu-0' || results[1]!.tool !== 'Glob') {
+      throw new Error(`second result wrongly attributed: id=${results[1]!.id} tool=${results[1]!.tool}`);
+    }
+    // Bodies match the right tool, not swapped.
+    if (!results[0]!.resultSummary?.includes('grep result')) {
+      throw new Error(`Grep result body mismatched: ${results[0]!.resultSummary}`);
+    }
+    if (!results[1]!.resultSummary?.includes('glob result')) {
+      throw new Error(`Glob result body mismatched: ${results[1]!.resultSummary}`);
+    }
+  });
+});
+
 await scenario('parallel runs: stats are isolated per run', async () => {
   const cwds = await Promise.all([
     mkdtemp(join(tmpdir(), 'mdredd-smoke-cwd-')),
