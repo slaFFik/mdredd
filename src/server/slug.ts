@@ -76,9 +76,9 @@ export async function deriveSlug(
   }
 
   if (!slugBase) {
-    const haikuSlug = await tryHaikuSlug(input.variantContent, input.claudeBin);
-    if (haikuSlug && isSafeSlugFragment(haikuSlug)) {
-      slugBase = haikuSlug;
+    const modelSlug = await tryModelSlug(input.variantContent, input.claudeBin);
+    if (modelSlug && isSafeSlugFragment(modelSlug)) {
+      slugBase = modelSlug;
       source = 'haiku';
     }
   }
@@ -111,7 +111,7 @@ export function slugStoragePath(storageRoot: string, folderName: string): string
   return join(storageRoot, folderName);
 }
 
-async function tryHaikuSlug(content: string, claudeBin: string): Promise<string | null> {
+async function tryModelSlug(content: string, claudeBin: string): Promise<string | null> {
   const prompt =
     'Produce a 2-4 word kebab-case slug summarizing this variant. Output only the slug, no quotes, no explanation. Example: "concise-style" or "verbose-debugging". Variant content follows:\n\n' +
     content.slice(0, 4_000);
@@ -148,7 +148,7 @@ async function tryHaikuSlug(content: string, claudeBin: string): Promise<string 
     let buf = '';
     proc.stdout.on('data', (d) => (buf += d.toString()));
     proc.stderr.on('data', (d) => {
-      log.debug('haiku-slug stderr', { text: d.toString().slice(0, 200) });
+      log.debug('model-slug stderr', { text: d.toString().slice(0, 200) });
     });
 
     const timer = setTimeout(() => {
@@ -158,7 +158,7 @@ async function tryHaikuSlug(content: string, claudeBin: string): Promise<string 
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      log.warn('haiku-slug spawn error', { error: err.message });
+      log.warn('model-slug spawn error', { error: err.message });
       finish(null);
     });
 
