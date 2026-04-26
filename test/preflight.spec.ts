@@ -111,29 +111,26 @@ await scenario('acquireLock: acquires, then re-acquires after release', async ()
   });
 });
 
-await scenario(
-  'acquireLock: surfaces ELOCKED as instance-running with rm -rf hint',
-  async () => {
-    await withTempStorage(async (storageRoot) => {
-      const lockPath = join(storageRoot, '.lock');
-      const release = await acquireLock(storageRoot, lockPath);
-      try {
-        const err = await expectPreflightError(
-          async () => {
-            await acquireLock(storageRoot, lockPath);
-          },
-          'instance-running',
-          'rm -rf',
-        );
-        if (!err.hint || !err.hint.includes(`${lockPath}.meta.json`)) {
-          throw new Error(`expected hint to mention meta sidecar, got: ${err.hint}`);
-        }
-      } finally {
-        await release();
+await scenario('acquireLock: surfaces ELOCKED as instance-running with rm -rf hint', async () => {
+  await withTempStorage(async (storageRoot) => {
+    const lockPath = join(storageRoot, '.lock');
+    const release = await acquireLock(storageRoot, lockPath);
+    try {
+      const err = await expectPreflightError(
+        async () => {
+          await acquireLock(storageRoot, lockPath);
+        },
+        'instance-running',
+        'rm -rf',
+      );
+      if (!err.hint || !err.hint.includes(`${lockPath}.meta.json`)) {
+        throw new Error(`expected hint to mention meta sidecar, got: ${err.hint}`);
       }
-    });
-  },
-);
+    } finally {
+      await release();
+    }
+  });
+});
 
 await scenario('acquireLock: legacy `.lock` file is migrated away', async () => {
   await withTempStorage(async (storageRoot) => {
