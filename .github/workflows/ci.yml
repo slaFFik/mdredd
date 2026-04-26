@@ -50,59 +50,44 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
-          # ESLint v10 requires ^20.19.0 || ^22.13.0 || >=24, so pick a Node
-          # that satisfies it (the typecheck/build/test matrix stays on the
-          # project's engines floor 20.19/22.12 to test the actual runtime).
           node-version: '22.13.x'
       - run: npm run lint
       - run: npm run format:check
 
   typecheck:
-    name: Typecheck (Node ${{ matrix.node-version }})
+    name: Typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ['20.19.x', '22.12.x']
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22.13.x'
       - run: npm run typecheck
 
   build:
-    name: Build (Node ${{ matrix.node-version }})
+    name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ['20.19.x', '22.12.x']
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22.13.x'
       - run: npm run build
 
   test:
-    name: Test (Node ${{ matrix.node-version }})
+    name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ['20.19.x', '22.12.x']
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22.13.x'
       - run: npm run test:preflight
       - run: npm run test:judge
       - run: npm run test:runner
