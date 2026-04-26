@@ -150,20 +150,24 @@ function reducer(state: AppState, action: Action): AppState {
     case 'snapshot': {
       const live: Record<string, ColumnLiveState> = { ...state.live };
       for (const c of action.payload.session.columns) {
-        if (live[c.id]) continue;
-        // Seed live state from the persisted transcript prefix when the run
-        // is still active and we have nothing in memory yet (typical hard
-        // page refresh mid-run). Without this, TranscriptView renders an
-        // empty pane until the next SSE event arrives. Issue #10.
         const folder = c.currentRunFolder;
         const status = action.payload.activeStatuses[c.id];
         const bundle = folder ? action.payload.runs[folder] : undefined;
-        if (bundle?.transcript && (status === 'preparing' || status === 'streaming')) {
+        const isActive = status === 'preparing' || status === 'streaming';
+        if (bundle?.transcript && isActive) {
+          // Reseed live from the persisted ndjson prefix on every snapshot
+          // for active runs. Covers both first-load (live empty) and
+          // SSE-reconnect-with-stale-live (the 2k in-memory ring may have
+          // evicted events during the disconnect; ndjson is the
+          // authority). The race against an in-flight buffered write is
+          // benign — projected and live carry the same content for events
+          // both paths have observed, and any event still buffered when
+          // /api/state read will arrive again on the next snapshot. Issue #10.
           live[c.id] = liveStateFromTranscript(
             bundle.transcript.events,
             bundle.transcript.startedAt,
           );
-        } else {
+        } else if (!live[c.id]) {
           live[c.id] = emptyLive();
         }
       }
