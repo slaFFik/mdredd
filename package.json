@@ -19,6 +19,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "start": "node dist/server/index.js",
+    "test": "npm run test:judge && npm run test:preflight && npm run test:runner",
     "test:runner": "tsx test/runner.smoke.ts",
     "test:judge": "tsx test/judge.spec.ts",
     "test:preflight": "tsx test/preflight.spec.ts"
@@ -28,12 +29,12 @@
   },
   "dependencies": {
     "@radix-ui/react-tooltip": "^1.2.8",
-    "get-port": "^7.1.0",
-    "ignore": "^7.0.3",
+    "get-port": "^7.2.0",
+    "ignore": "^7.0.5",
     "json5": "^2.2.3",
-    "open": "^10.1.0",
+    "open": "^11.0.0",
     "proper-lockfile": "^4.1.2",
-    "zod": "^3.23.8"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

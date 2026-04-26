@@ -9,16 +9,14 @@ export default defineConfig({
   plugins: [react()],
   root: resolve(__dirname, 'src/web'),
   publicDir: false,
+  resolve: {
+    tsconfigPaths: true,
+  },
   build: {
     outDir: resolve(__dirname, 'dist/web'),
     emptyOutDir: true,
     sourcemap: true,
     target: 'es2022',
-  },
-  resolve: {
-    alias: {
-      '@shared': resolve(__dirname, 'src/shared'),
-    },
   },
   server: {
     port: 5173,
