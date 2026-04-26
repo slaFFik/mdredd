@@ -62,10 +62,38 @@ async function main(): Promise<void> {
     }
   });
 
+  // 5s for runners to drain (each runner self-bounds at SIGTERM+2s SIGKILL),
+  // plus 3s slack for lockfile / FS work. Anything still hanging past the hard
+  // timer is force-exited so a stuck child can never wedge the server.
+  const STOP_RUNNERS_TIMEOUT_MS = 5_000;
+  const HARD_SHUTDOWN_TIMEOUT_MS = 8_000;
+
+  let shuttingDown = false;
   const shutdown = async (sig: string): Promise<void> => {
-    log.info('server.shutdown', { signal: sig });
-    server.close();
-    await releaseLock(preflight.lockFilePath);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info('server.shutdown', { signal: sig, activeRuns: runManager.activeCount() });
+    const hardTimer = setTimeout(() => {
+      log.error('server.shutdown-forced-exit', { reason: 'hard timeout exceeded' });
+      process.exit(1);
+    }, HARD_SHUTDOWN_TIMEOUT_MS);
+    hardTimer.unref();
+    try {
+      // Stop accepting new HTTP traffic and drop existing keep-alive/SSE
+      // connections so the server's `listening` socket and the SSE keepers
+      // don't hold the event loop open.
+      server.close();
+      server.closeAllConnections?.();
+      const result = await runManager.stopAll(STOP_RUNNERS_TIMEOUT_MS);
+      if (result.timedOut) {
+        log.warn('server.shutdown.stopAll-timeout', { stopped: result.stopped });
+      }
+      await releaseLock(preflight.lockFilePath);
+    } catch (err) {
+      log.error('server.shutdown-error', { error: (err as Error).message });
+    } finally {
+      clearTimeout(hardTimer);
+    }
     process.exit(0);
   };
   process.on('SIGINT', () => {

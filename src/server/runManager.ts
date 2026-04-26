@@ -51,10 +51,54 @@ export class RunManager extends EventEmitter {
     return this.active.size > 0;
   }
 
+  activeCount(): number {
+    return this.active.size;
+  }
+
+  isColumnActive(columnId: string): boolean {
+    return this.active.has(columnId);
+  }
+
   getActiveStatus(columnId: string): RunStatus | 'idle' {
     const r = this.active.get(columnId);
     if (!r) return 'idle';
     return 'streaming';
+  }
+
+  /**
+   * Terminate every active runner and wait for finalize() (transcript write +
+   * 'ended' emit) to complete. Bounded by `timeoutMs` so a stuck child cannot
+   * block server shutdown indefinitely. Returns whether the timeout fired.
+   *
+   * Each runner already SIGKILLs its child after a 2s grace, so a 5s outer
+   * timeout is generous; the timeout exists for pathological cases (filesystem
+   * stalls during transcript write, etc.).
+   */
+  async stopAll(timeoutMs: number = 5000): Promise<{ stopped: number; timedOut: boolean }> {
+    const runners = Array.from(this.active.values());
+    if (runners.length === 0) return { stopped: 0, timedOut: false };
+    log.info('runManager.stopAll', { count: runners.length, timeoutMs });
+    const drain = Promise.all(
+      runners.map(async (r) => {
+        try {
+          await r.stop();
+          await r.wait();
+        } catch (err) {
+          log.warn('runManager.stopAll-runner-failed', { error: (err as Error).message });
+        }
+      }),
+    );
+    let timedOut = false;
+    await Promise.race([
+      drain.then(() => undefined),
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, timeoutMs);
+      }),
+    ]);
+    return { stopped: runners.length, timedOut };
   }
 
   subscribe(sub: SseSubscriber): () => void {

@@ -148,6 +148,15 @@ export function createRouter(deps: RouteDeps) {
       const colDeleteMatch = path.match(/^\/api\/columns\/([^/]+)$/);
       if (colDeleteMatch && method === 'DELETE') {
         const columnId = colDeleteMatch[1]!;
+        // Refuse to delete a column with an active run — otherwise the
+        // subprocess would keep streaming, the UI would hide its Stop button,
+        // and the user would be paying for tokens against an invisible run.
+        if (deps.runManager.isColumnActive(columnId)) {
+          return json(res, 409, {
+            error: 'column-active',
+            message: 'stop the active run before deleting the column',
+          });
+        }
         const updated = await deps.session.mutate((s) => {
           if (s.columns.length <= 1) {
             throw new RunManagerError('last-column', 'cannot delete last column', 400);
