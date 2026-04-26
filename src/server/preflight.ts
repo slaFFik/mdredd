@@ -25,7 +25,11 @@ export interface PreflightResult {
 // Threshold (ms) past which a lockfile is considered stale and may be
 // reclaimed. proper-lockfile refreshes the lockfile's mtime every stale/2
 // while the holder is alive; after a crash it is reclaimable after `stale` ms.
-const LOCK_STALE_MS = 30_000;
+// Set generously: a long event-loop stall, debugger pause, or brief system
+// sleep should not cause a second invocation to consider the lock stale and
+// race with the original — that would defeat the single-instance guarantee.
+// Users can always reclaim manually via the hint in `instance-running`.
+const LOCK_STALE_MS = 5 * 60_000;
 
 export class PreflightError extends Error {
   code: string;
@@ -287,7 +291,7 @@ async function acquireLock(
       throw new PreflightError(
         'instance-running',
         `Another mdredd instance appears to be running${info}.`,
-        `Close it first, or remove ${lockFilePath} if you are sure it is stale.`,
+        `Close it first, or, if you are sure it is stale, remove the lock directory and its sidecar: rm -rf ${lockFilePath} ${metaPath}`,
       );
     }
     throw err;
