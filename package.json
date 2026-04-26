@@ -22,7 +22,8 @@
     "test": "npm run test:judge && npm run test:preflight && npm run test:runner",
     "test:runner": "tsx test/runner.smoke.ts",
     "test:judge": "tsx test/judge.spec.ts",
-    "test:preflight": "tsx test/preflight.spec.ts"
+    "test:preflight": "tsx test/preflight.spec.ts",
+    "test:sandbox": "tsx test/sandbox.spec.ts"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

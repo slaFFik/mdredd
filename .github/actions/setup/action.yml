@@ -1,0 +1,15 @@
+name: Setup Node and install
+description: Checkout, set up Node with npm cache, and install dependencies.
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+    - shell: bash
+      run: npm ci --prefer-offline --no-audit --no-fund
