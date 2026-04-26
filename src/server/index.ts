@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import getPort from 'get-port';
 import open from 'open';
-import { runPreflight, writeLock, releaseLock } from './preflight.js';
+import { runPreflight, writeLockMeta } from './preflight.js';
 import { SessionStore } from './session.js';
 import { RunManager } from './runManager.js';
 import { createRouter } from './routes.js';
@@ -28,85 +28,113 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const sessionStore = await SessionStore.load(preflight.storageRoot, cwd);
-  const port = await getPort({ port: [DEFAULT_PREF_PORT, 6801, 6802, 6803, 6804, 0] });
-  const auth = makeAuthContext(port);
+  // The lock is owned from this point forward; release it on any failure so
+  // a botched startup doesn't leave a stale lock blocking subsequent runs
+  // until the staleness window expires.
+  try {
+    const sessionStore = await SessionStore.load(preflight.storageRoot, cwd);
+    const port = await getPort({ port: [DEFAULT_PREF_PORT, 6801, 6802, 6803, 6804, 0] });
+    const auth = makeAuthContext(port);
 
-  const runManager = new RunManager({
-    claudeBin,
-    cwd,
-    storageRoot: preflight.storageRoot,
-    session: sessionStore,
-  });
-  await runManager.init();
-
-  const webRoot = resolveWebRoot();
-  const handler = createRouter({ auth, session: sessionStore, runManager, webRoot, cwd });
-
-  const server = createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch((err) => {
-      log.error('http.handler-rejected', { error: (err as Error).message });
-      try {
-        res.statusCode = 500;
-        res.end();
-      } catch {
-        /* */
-      }
+    const runManager = new RunManager({
+      claudeBin,
+      cwd,
+      storageRoot: preflight.storageRoot,
+      session: sessionStore,
     });
-  });
+    await runManager.init();
 
-  server.listen(port, '127.0.0.1', async () => {
-    await writeLock(preflight.lockFilePath, process.pid, port);
-    const url = `${auth.origin}/?t=${auth.token}`;
-    log.info('server.listening', { url, pid: process.pid });
-    console.log(`mdredd listening at ${url}`);
-    if (shouldOpen) {
-      open(url).catch((err) => {
-        console.log(`(could not open browser automatically: ${err.message})`);
+    const webRoot = resolveWebRoot();
+    const handler = createRouter({ auth, session: sessionStore, runManager, webRoot, cwd });
+
+    const server = createServer((req, res) => {
+      Promise.resolve(handler(req, res)).catch((err) => {
+        log.error('http.handler-rejected', { error: (err as Error).message });
+        try {
+          res.statusCode = 500;
+          res.end();
+        } catch {
+          /* */
+        }
       });
-    }
-  });
+    });
 
-  // 5s for runners to drain (each runner self-bounds at SIGTERM+2s SIGKILL),
-  // plus 3s slack for lockfile / FS work. Anything still hanging past the hard
-  // timer is force-exited so a stuck child can never wedge the server.
-  const STOP_RUNNERS_TIMEOUT_MS = 5_000;
-  const HARD_SHUTDOWN_TIMEOUT_MS = 8_000;
+    // Bind failures (EADDRINUSE/EACCES) surface via the 'error' event, not
+    // the listen callback. Without this handler Node would emit an unhandled
+    // 'error' and exit while still holding the proper-lockfile lock,
+    // blocking restarts until the stale window expires.
+    server.once('error', (err) => {
+      console.error(`mdredd: failed to bind ${port}: ${err.message}`);
+      log.error('server.listen-error', { port, error: err.message });
+      void preflight.releaseLock().finally(() => process.exit(1));
+    });
 
-  let shuttingDown = false;
-  const shutdown = async (sig: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.info('server.shutdown', { signal: sig, activeRuns: runManager.activeCount() });
-    const hardTimer = setTimeout(() => {
-      log.error('server.shutdown-forced-exit', { reason: 'hard timeout exceeded' });
-      process.exit(1);
-    }, HARD_SHUTDOWN_TIMEOUT_MS);
-    hardTimer.unref();
-    try {
-      // Stop accepting new HTTP traffic and drop existing keep-alive/SSE
-      // connections so the server's `listening` socket and the SSE keepers
-      // don't hold the event loop open.
-      server.close();
-      server.closeAllConnections?.();
-      const result = await runManager.stopAll(STOP_RUNNERS_TIMEOUT_MS);
-      if (result.timedOut) {
-        log.warn('server.shutdown.stopAll-timeout', { stopped: result.stopped });
+    server.listen(port, '127.0.0.1', () => {
+      // Keep this callback synchronous so a writeLockMeta rejection cannot
+      // escape as an unhandled promise rejection. On failure release the
+      // lock (we just acquired it but never wrote the sidecar) and exit.
+      writeLockMeta(preflight.lockFilePath, process.pid, port)
+        .then(() => {
+          const url = `${auth.origin}/?t=${auth.token}`;
+          log.info('server.listening', { url, pid: process.pid });
+          console.log(`mdredd listening at ${url}`);
+          if (shouldOpen) {
+            open(url).catch((err) => {
+              console.log(`(could not open browser automatically: ${err.message})`);
+            });
+          }
+        })
+        .catch((err) => {
+          console.error(`mdredd: could not write lock metadata: ${(err as Error).message}`);
+          log.error('server.lock-meta-failed', { error: (err as Error).message });
+          void preflight.releaseLock().finally(() => process.exit(1));
+        });
+    });
+
+    // 5s for runners to drain (each runner self-bounds at SIGTERM+2s SIGKILL),
+    // plus 3s slack for lockfile / FS work. Anything still hanging past the hard
+    // timer is force-exited so a stuck child can never wedge the server.
+    const STOP_RUNNERS_TIMEOUT_MS = 5_000;
+    const HARD_SHUTDOWN_TIMEOUT_MS = 8_000;
+
+    let shuttingDown = false;
+    const shutdown = async (sig: string): Promise<void> => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      log.info('server.shutdown', { signal: sig, activeRuns: runManager.activeCount() });
+      const hardTimer = setTimeout(() => {
+        log.error('server.shutdown-forced-exit', { reason: 'hard timeout exceeded' });
+        process.exit(1);
+      }, HARD_SHUTDOWN_TIMEOUT_MS);
+      hardTimer.unref();
+      try {
+        // Stop accepting new HTTP traffic and drop existing keep-alive/SSE
+        // connections so the server's `listening` socket and the SSE keepers
+        // don't hold the event loop open.
+        server.close();
+        server.closeAllConnections?.();
+        const result = await runManager.stopAll(STOP_RUNNERS_TIMEOUT_MS);
+        if (result.timedOut) {
+          log.warn('server.shutdown.stopAll-timeout', { stopped: result.stopped });
+        }
+        await preflight.releaseLock();
+      } catch (err) {
+        log.error('server.shutdown-error', { error: (err as Error).message });
+      } finally {
+        clearTimeout(hardTimer);
       }
-      await releaseLock(preflight.lockFilePath);
-    } catch (err) {
-      log.error('server.shutdown-error', { error: (err as Error).message });
-    } finally {
-      clearTimeout(hardTimer);
-    }
-    process.exit(0);
-  };
-  process.on('SIGINT', () => {
-    void shutdown('SIGINT');
-  });
-  process.on('SIGTERM', () => {
-    void shutdown('SIGTERM');
-  });
+      process.exit(0);
+    };
+    process.on('SIGINT', () => {
+      void shutdown('SIGINT');
+    });
+    process.on('SIGTERM', () => {
+      void shutdown('SIGTERM');
+    });
+  } catch (err) {
+    await preflight.releaseLock().catch(() => undefined);
+    throw err;
+  }
 }
 
 function resolveWebRoot(): string {
