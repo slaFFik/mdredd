@@ -25,7 +25,7 @@ export interface RouteDeps {
   session: SessionStore;
   runManager: RunManager;
   webRoot: string; // dist/web absolute path
-  cwd: string;     // user project cwd — used to scan .claude/skills and .claude/agents
+  cwd: string; // user project cwd — used to scan .claude/skills and .claude/agents
   includePartialBuild?: boolean;
 }
 
@@ -123,8 +123,10 @@ export function createRouter(deps: RouteDeps) {
           const col = s.columns.find((c) => c.id === columnId);
           if (!col) throw new RunManagerError('column-not-found', 'unknown column', 404);
           if (body.variantName !== undefined) col.variantName = String(body.variantName);
-          if (body.variantType !== undefined) col.variantType = VariantTypeSchema.parse(body.variantType);
-          if (body.skillOrAgentName !== undefined) col.skillOrAgentName = body.skillOrAgentName as string | null;
+          if (body.variantType !== undefined)
+            col.variantType = VariantTypeSchema.parse(body.variantType);
+          if (body.skillOrAgentName !== undefined)
+            col.skillOrAgentName = body.skillOrAgentName as string | null;
           if (body.variantContent !== undefined) col.variantContent = String(body.variantContent);
           if (body.prompt !== undefined) col.prompt = String(body.prompt);
           if (body.model !== undefined) col.model = String(body.model);
@@ -329,9 +331,7 @@ async function fallbackHtml(res: ServerResponse, deps: RouteDeps): Promise<void>
   } catch {
     res.statusCode = 503;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
-    res.end(
-      'mdredd web bundle is missing. Run `npm run build` (or `npm run dev:web` in dev).',
-    );
+    res.end('mdredd web bundle is missing. Run `npm run build` (or `npm run dev:web` in dev).');
   }
 }
 

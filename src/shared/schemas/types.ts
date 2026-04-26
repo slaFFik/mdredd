@@ -43,10 +43,7 @@ export const TERMINAL_RUN_STATUSES: RunStatus[] = [
   'abandoned',
 ];
 
-export const TERMINAL_COLUMN_STATUSES: ColumnStatus[] = [
-  'idle',
-  ...TERMINAL_RUN_STATUSES,
-];
+export const TERMINAL_COLUMN_STATUSES: ColumnStatus[] = ['idle', ...TERMINAL_RUN_STATUSES];
 
 export function isTerminalColumnStatus(s: ColumnStatus): boolean {
   return TERMINAL_COLUMN_STATUSES.includes(s);

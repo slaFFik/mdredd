@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { fsList, fsRead, type FsEntry } from '../lib/api.js';
 
 export function FilePickerModal(props: {
@@ -26,6 +26,8 @@ export function FilePickerModal(props: {
   }, []);
 
   useEffect(() => {
+    // Fetch-on-open: dispatched updates happen after async work, not synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (props.open) void load('');
   }, [props.open, load]);
 
@@ -64,11 +66,7 @@ export function FilePickerModal(props: {
             return (
               <span key={path}>
                 <span className="sep">/</span>
-                <button
-                  type="button"
-                  onClick={() => void load(path)}
-                  disabled={isLast}
-                >
+                <button type="button" onClick={() => void load(path)} disabled={isLast}>
                   {seg}
                 </button>
               </span>
@@ -78,9 +76,7 @@ export function FilePickerModal(props: {
         {error && <div className="picker-error">{error}</div>}
         <div className="picker-list">
           {loading && <div className="empty-hint">Loading…</div>}
-          {!loading && entries.length === 0 && !error && (
-            <div className="empty-hint">(empty)</div>
-          )}
+          {!loading && entries.length === 0 && !error && <div className="empty-hint">(empty)</div>}
           {!loading && currentPath && (
             <button
               type="button"

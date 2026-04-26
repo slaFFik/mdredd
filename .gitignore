@@ -1,5 +1,10 @@
 /agents
 node_modules
 dist
+.vite
+coverage
 .DS_Store
 *.log
+*.tgz
+.idea
+.vscode

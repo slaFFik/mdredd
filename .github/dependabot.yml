@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      types:
+        patterns:
+          - '@types/*'
+      eslint:
+        patterns:
+          - 'eslint'
+          - 'eslint-*'
+          - '@eslint/*'
+          - 'typescript-eslint'
+      react:
+        patterns:
+          - 'react'
+          - 'react-dom'
+          - '@vitejs/plugin-react'
+          - 'babel-plugin-react-compiler'
+      dev-tooling:
+        patterns:
+          - 'typescript'
+          - 'tsx'
+          - 'tsc-alias'
+          - 'vite'
+          - 'prettier'
+          - 'concurrently'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

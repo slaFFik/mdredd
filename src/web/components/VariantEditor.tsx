@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ChangeEvent, type JSX } from 'react';
 import { FilePickerModal } from './FilePickerModal.js';
 import { Hint } from './Hint.js';
 
@@ -10,7 +10,7 @@ export function VariantEditor(props: {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
@@ -29,7 +29,11 @@ export function VariantEditor(props: {
             </button>
           </Hint>
           <Hint content="Pick a file from anywhere on your computer (outside this project) — e.g. a draft on your Desktop or a file from another repo.">
-            <button type="button" disabled={props.disabled} onClick={() => inputRef.current?.click()}>
+            <button
+              type="button"
+              disabled={props.disabled}
+              onClick={() => inputRef.current?.click()}
+            >
               Upload…
             </button>
           </Hint>

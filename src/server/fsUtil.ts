@@ -113,7 +113,10 @@ export async function loadGitignore(dir: string): Promise<Ignore | null> {
     raw = await readFile(gitignorePath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn('fsUtil.gitignore-read-failed', { path: gitignorePath, error: (err as Error).message });
+      log.warn('fsUtil.gitignore-read-failed', {
+        path: gitignorePath,
+        error: (err as Error).message,
+      });
     }
     return null;
   }

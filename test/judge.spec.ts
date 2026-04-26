@@ -47,7 +47,9 @@ function toolUseBlock(name: string): { type: string; name: string; input: unknow
 
 function expect(actual: string, expected: string, label: string): void {
   if (actual !== expected) {
-    throw new Error(`${label}\n  expected: ${JSON.stringify(expected)}\n  actual:   ${JSON.stringify(actual)}`);
+    throw new Error(
+      `${label}\n  expected: ${JSON.stringify(expected)}\n  actual:   ${JSON.stringify(actual)}`,
+    );
   }
 }
 
@@ -70,22 +72,14 @@ scenario('empty transcript returns sentinel', () => {
 
 scenario('aggregate-only single turn returns its text', () => {
   const out = extractFinalAssistantMessage(
-    makeTranscript([
-      turn(1),
-      assistantMessage([textBlock('the answer is 42')]),
-    ]),
+    makeTranscript([turn(1), assistantMessage([textBlock('the answer is 42')])]),
   );
   expect(out, 'the answer is 42', 'aggregate-only');
 });
 
 scenario('partial-only (truncated, no aggregate emitted)', () => {
   // Wallclock cap fires after partials but before message_stop. No aggregate ever lands.
-  const out = extractFinalAssistantMessage(
-    makeTranscript([
-      partial('hello '),
-      partial('world'),
-    ]),
-  );
+  const out = extractFinalAssistantMessage(makeTranscript([partial('hello '), partial('world')]));
   expect(out, 'hello world', 'partial-only');
 });
 
@@ -116,11 +110,7 @@ scenario('multi-turn aggregates: all turns visible to judge', () => {
       turn(3),
     ]),
   );
-  expect(
-    out,
-    'detailed analysis turn 1\n\ncontinuing analysis turn 2\n\nDone.',
-    'multi-turn',
-  );
+  expect(out, 'detailed analysis turn 1\n\ncontinuing analysis turn 2\n\nDone.', 'multi-turn');
 });
 
 scenario('truncated last turn: earlier aggregates + trailing partials', () => {
@@ -152,10 +142,7 @@ scenario('tool-using turn: only text block extracted, tool_use ignored', () => {
 
 scenario('thinking-only partials are ignored', () => {
   const out = extractFinalAssistantMessage(
-    makeTranscript([
-      partial('hidden reasoning', 'thinking'),
-      partial('more thinking', 'thinking'),
-    ]),
+    makeTranscript([partial('hidden reasoning', 'thinking'), partial('more thinking', 'thinking')]),
   );
   expect(out, NO_FINAL, 'thinking-only');
 });
@@ -164,10 +151,7 @@ scenario('aggregate with no text content is skipped', () => {
   // Tool-only turn (no text block, just a tool_use). Aggregate emits but contributes
   // nothing. Falls through to sentinel when nothing else exists.
   const out = extractFinalAssistantMessage(
-    makeTranscript([
-      assistantMessage([toolUseBlock('Glob')]),
-      turn(1),
-    ]),
+    makeTranscript([assistantMessage([toolUseBlock('Glob')]), turn(1)]),
   );
   expect(out, NO_FINAL, 'tool-only-aggregate');
 });
@@ -176,10 +160,7 @@ scenario('aggregate with string content (defensive) is handled', () => {
   // Older claude shapes occasionally pass `content` as a plain string rather than
   // an array of blocks. Don't break.
   const out = extractFinalAssistantMessage(
-    makeTranscript([
-      assistantMessage('legacy string content'),
-      turn(1),
-    ]),
+    makeTranscript([assistantMessage('legacy string content'), turn(1)]),
   );
   expect(out, 'legacy string content', 'string-content');
 });
@@ -202,12 +183,7 @@ scenario('regression: turn marker no longer resets buffer', () => {
   // partial-only path was the only one that worked. With this fix, both aggregate
   // and partial paths capture the full content.
   const partialOnly = extractFinalAssistantMessage(
-    makeTranscript([
-      partial('first turn text'),
-      turn(1),
-      partial('second turn text'),
-      turn(2),
-    ]),
+    makeTranscript([partial('first turn text'), turn(1), partial('second turn text'), turn(2)]),
   );
   expect(partialOnly, 'first turn textsecond turn text', 'no-reset-on-turn');
 });
@@ -294,7 +270,10 @@ scenario('prompt: each user-controlled section is wrapped in nonce-delimited fen
   // Fence markers carry a 16-hex-char nonce; both halves must use the same nonce.
   const openMatches = prompt.match(/<<<UNTRUSTED-DATA-([0-9a-f]{16})>>>/g);
   const closeMatches = prompt.match(/<<<END-UNTRUSTED-DATA-([0-9a-f]{16})>>>/g);
-  expectTrue(!!openMatches && openMatches.length >= 5, 'opens for prompt+variant+final+tools+manifest');
+  expectTrue(
+    !!openMatches && openMatches.length >= 5,
+    'opens for prompt+variant+final+tools+manifest',
+  );
   expectTrue(!!closeMatches && closeMatches.length >= 5, 'matching closes');
   // All occurrences must share the same nonce (one nonce per build).
   const nonces = new Set((openMatches ?? []).map((m) => m.replace(/[^0-9a-f]/g, '')));

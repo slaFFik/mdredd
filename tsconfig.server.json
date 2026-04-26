@@ -10,12 +10,7 @@
     "rootDir": "./src",
     "noEmit": false,
     "declaration": false,
-    "sourceMap": true,
-    "baseUrl": ".",
-    "ignoreDeprecations": "5.0",
-    "paths": {
-      "@shared/*": ["src/shared/*"]
-    }
+    "sourceMap": true
   },
   "include": ["src/server/**/*", "src/shared/**/*"]
 }
