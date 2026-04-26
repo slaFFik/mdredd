@@ -505,7 +505,7 @@ function makeJudgeInputForTmp(runDir: string): {
     claudeBin: '/bin/false',
     runDir,
     runConfig: makeRunConfig({ runFolder: 'run-timeout' }),
-    // Fill the transcript with a plenty of bytes so halving the caps would be observable.
+    // Fill the transcript with plenty of bytes so halving the caps would be observable.
     transcript: makeTranscript([assistantMessage([textBlock('x'.repeat(20_000))]), turn(1)]),
     variantContent: 'v'.repeat(20_000),
     outputs: [],
