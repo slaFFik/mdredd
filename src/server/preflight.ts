@@ -271,7 +271,7 @@ async function migrateLegacyLock(lockFilePath: string): Promise<void> {
   }
 }
 
-async function acquireLock(
+export async function acquireLock(
   storageRoot: string,
   lockFilePath: string,
 ): Promise<() => Promise<void>> {
@@ -297,7 +297,17 @@ async function acquireLock(
     throw err;
   }
   return async () => {
-    await release().catch(() => undefined);
+    try {
+      await release();
+    } catch (err) {
+      // Surface release failures so the operator knows why the lock wasn't
+      // cleared — they will have to wait out the stale window or remove the
+      // lock directory manually (see the `instance-running` hint).
+      log.warn('preflight.lock-release-failed', {
+        path: lockFilePath,
+        error: (err as Error).message,
+      });
+    }
     await unlink(metaPath).catch(() => undefined);
   };
 }
