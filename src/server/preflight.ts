@@ -1,6 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
 import { PROJECT_MARKERS, STORAGE_DIR_NAME } from '@shared/constants.js';
@@ -33,6 +33,7 @@ export class PreflightError extends Error {
 
 export async function runPreflight(input: PreflightInput): Promise<PreflightResult> {
   await checkClaudeCli(input.claudeBin);
+  await authSmokeTest(input.claudeBin);
   const storageRoot = join(homedir(), STORAGE_DIR_NAME);
   await cwdGuard(input.cwd, input.force ?? false, storageRoot);
   const lockFilePath = join(storageRoot, '.lock');
@@ -66,6 +67,7 @@ async function checkClaudeCli(bin: string): Promise<void> {
       '--strict-mcp-config',
       '--setting-sources',
       '--model',
+      '--json-schema',
     ];
     const missing = required.filter((flag) => !stdout.includes(flag));
     if (missing.length) {
@@ -83,6 +85,106 @@ async function checkClaudeCli(bin: string): Promise<void> {
       'Try running `claude --help` manually and report the error.',
     );
   }
+}
+
+// Probe schema for the auth smoke test: forces the CLI to exercise the
+// --json-schema path the judge depends on, using a trivial shape that any
+// model can emit in one short turn.
+const PING_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok'],
+  properties: { ok: { type: 'boolean' } },
+} as const;
+
+const PING_TIMEOUT_MS = 30_000;
+
+export async function authSmokeTest(bin: string): Promise<void> {
+  const args = [
+    '-p',
+    'ping',
+    '--model',
+    'haiku',
+    '--output-format',
+    'json',
+    '--tools',
+    '',
+    '--allowedTools',
+    '',
+    '--strict-mcp-config',
+    '--setting-sources',
+    'user',
+    '--disable-slash-commands',
+    '--json-schema',
+    JSON.stringify(PING_JSON_SCHEMA),
+  ];
+
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+
+  const result = await new Promise<{
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+    timedOut: boolean;
+    spawnError?: Error;
+  }>((resolve) => {
+    const proc = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: tmpdir(),
+      env,
+    });
+    let stderr = '';
+    proc.stdout.on('data', () => { /* drain */ });
+    proc.stderr.on('data', (d) => (stderr += d.toString()));
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+    }, PING_TIMEOUT_MS);
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ exitCode: null, signal: null, stderr, timedOut: false, spawnError: err });
+    });
+    proc.on('exit', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ exitCode: code, signal, stderr, timedOut });
+    });
+  });
+
+  if (result.spawnError) {
+    throw new PreflightError(
+      'claude-auth-spawn-failed',
+      `Could not spawn ${bin} for auth smoke test: ${result.spawnError.message}`,
+      'Ensure `claude` is on PATH or set CLAUDE_BIN.',
+    );
+  }
+
+  if (result.timedOut) {
+    throw new PreflightError(
+      'claude-auth-timeout',
+      `\`${bin} -p "ping"\` did not respond within ${PING_TIMEOUT_MS / 1000}s.`,
+      'If you are not authenticated, run `claude login`. Otherwise check your network and retry.',
+    );
+  }
+
+  if (result.exitCode !== 0) {
+    const stderrTail = result.stderr.trim().slice(-500);
+    const looksLikeAuth = isLikelyAuthError(result.stderr);
+    throw new PreflightError(
+      'claude-auth-failed',
+      `\`${bin} -p "ping"\` exited ${result.exitCode}${stderrTail ? `: ${stderrTail}` : ''}`,
+      looksLikeAuth
+        ? 'Run `claude login` first, then try again.'
+        : 'Run `claude login` first, then try again. If the error above is unrelated to auth, fix it and retry.',
+    );
+  }
+
+  log.info('preflight.claude-auth-ok', {});
+}
+
+function isLikelyAuthError(stderr: string): boolean {
+  return /\b(auth|authenticat|login|unauthori[sz]ed|401|403|api[_ -]?key|credentials?)\b/i.test(stderr);
 }
 
 async function cwdGuard(cwd: string, force: boolean, storageRoot: string): Promise<void> {
