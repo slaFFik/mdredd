@@ -48,6 +48,7 @@ export class Runner extends EventEmitter {
   private streamLog: WriteStream | null = null;
   private stderrLog: WriteStream | null = null;
   private parseErrorsLog: WriteStream | null = null;
+  private transcriptLog: WriteStream | null = null;
   private startedAt = 0;
   private turnCap: number;
   private wallClockCap: number;
@@ -105,6 +106,13 @@ export class Runner extends EventEmitter {
       join(this.input.runDir, 'parse-errors.log'),
       { flags: 'a' },
     );
+    // Append-only normalized event log. Persisted incrementally so a browser
+    // refresh or harness crash mid-run can replay the prefix from disk —
+    // transcript.json is only written at finalize() (issue #10).
+    this.transcriptLog = createWriteStream(
+      join(this.input.runDir, 'transcript.ndjson'),
+      { flags: 'a' },
+    );
 
     await this.persistConfig();
 
@@ -141,6 +149,9 @@ export class Runner extends EventEmitter {
     });
     this.parser.on('normalized', (e) => {
       this.events.push(e);
+      // Persist before emitting: if the harness dies between write and emit,
+      // the on-disk log is the source of truth for /api/state replay.
+      this.transcriptLog?.write(JSON.stringify(e) + '\n');
       this.emit('normalized', e);
     });
     this.parser.on('turn', (n) => {
@@ -280,6 +291,7 @@ export class Runner extends EventEmitter {
         this.streamLog?.end();
         this.stderrLog?.end();
         this.parseErrorsLog?.end();
+        this.transcriptLog?.end();
 
         const transcript: TranscriptFile = {
           runFolder: cfg.runFolder,

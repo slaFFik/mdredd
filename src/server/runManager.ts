@@ -44,7 +44,14 @@ export class RunManager extends EventEmitter {
 
   async init(): Promise<void> {
     const persisted = await readJsonIfExists<{ seq: number }>(join(this.opts.storageRoot, SEQ_FILE));
-    this.seq = persisted?.seq ?? 0;
+    // .seq is persisted only every 25 events, so a crash can leave the
+    // on-disk value up to 24 events behind the seqs the previous server
+    // already streamed to clients. After a restart, advance past the entire
+    // ring buffer so any new events use seqs strictly higher than anything a
+    // browser may still hold as Last-Event-ID — otherwise the SSE
+    // resume-from-ring filter (`e.seq > sub.lastEventId`) would skip
+    // legitimately new events. Issue #10.
+    this.seq = (persisted?.seq ?? 0) + RING_BUFFER_LIMIT;
   }
 
   hasActive(): boolean {

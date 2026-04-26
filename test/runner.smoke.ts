@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Runner } from '../src/server/runner.js';
@@ -596,6 +596,154 @@ await scenario('runManager.stopAll: terminates active runners and persists cance
     else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
     if (savedDelay === undefined) delete process.env.FAKE_CLAUDE_DELAY_MS;
     else process.env.FAKE_CLAUDE_DELAY_MS = savedDelay;
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+await scenario('transcript.ndjson: events are appended incrementally during the run', async () => {
+  await withSandbox('ndjson-incremental', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const runner = new Runner({
+      claudeBin: fakeBin,
+      projectDir,
+      runDir,
+      outputsDir,
+      prompt: 'go',
+      model: 'haiku',
+      mode: 'read-only',
+      caps: { turns: 100, wallClockMs: 30_000 },
+      initialConfig,
+      env: {
+        ...process.env,
+        FAKE_CLAUDE_SCENARIO: 'many-turns',
+        FAKE_CLAUDE_TURNS: '4',
+        FAKE_CLAUDE_PER_TURN_DELAY_MS: '80',
+      },
+    });
+    await runner.start();
+    // Sample the on-disk ndjson while the run is still in flight. The fake's
+    // per-turn delay gives the writer time to flush at least one normalized
+    // event before we read.
+    let mid = '';
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
+      if (mid.split('\n').filter((l) => l.trim()).length >= 1) break;
+    }
+    const midLines = mid.split('\n').filter((l) => l.trim());
+    if (midLines.length === 0) {
+      throw new Error('no events appeared in transcript.ndjson before run end');
+    }
+    for (const line of midLines) {
+      JSON.parse(line); // each line must be valid JSON
+    }
+    const final = await runner.wait();
+    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+    const fullRaw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
+    const fullLines = fullRaw.split('\n').filter((l) => l.trim());
+    if (fullLines.length < midLines.length) {
+      throw new Error(`final ndjson shorter than mid-run sample: ${fullLines.length} < ${midLines.length}`);
+    }
+    const turns = fullLines.map((l) => JSON.parse(l) as { t: string }).filter((e) => e.t === 'turn');
+    if (turns.length !== 4) {
+      throw new Error(`expected 4 turn events in ndjson, got ${turns.length}`);
+    }
+    // Final transcript.json must agree with the ndjson stream (issue #10).
+    const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
+      events: Array<{ t: string }>;
+    };
+    if (transcript.events.length !== fullLines.length) {
+      throw new Error(
+        `transcript.json events (${transcript.events.length}) != ndjson lines (${fullLines.length})`,
+      );
+    }
+  });
+});
+
+await scenario('readRunBundle: replays partial transcript from ndjson when transcript.json missing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-partial-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    const runFolder = `run-partial-${Date.now()}`;
+    const runDir = join(storageRoot, runFolder);
+    const config: RunConfig = {
+      runFolder,
+      columnId: 'col-1',
+      variantName: 'partial',
+      variantType: 'CLAUDE.md',
+      skillOrAgentName: null,
+      variantContentSha256: '',
+      promptSha256: '',
+      prompt: 'p',
+      model: 'haiku',
+      mode: 'read-only',
+      status: 'streaming',
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      turnCount: 1,
+      wallClockMs: 0,
+      truncationReason: null,
+      exitCode: null,
+      signal: null,
+      errorMessage: null,
+      toolAllowlist: [],
+      caps: { turns: 50, wallClockMs: 30_000 },
+    };
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'config.json'), JSON.stringify(config));
+    // Two valid lines + one torn (trailing partial) line — readPartialTranscript
+    // tolerates the torn last line and returns the parseable prefix.
+    const lines = [
+      JSON.stringify({ t: 'turn', turn: 1, ts: Date.now() }),
+      JSON.stringify({ t: 'message', role: 'assistant', content: 'hi', ts: Date.now() }),
+      '{"t":"partial","chunk":"abc',
+    ];
+    await writeFile(join(runDir, 'transcript.ndjson'), lines.join('\n'));
+
+    const bundle = await session.readRunBundle(runFolder);
+    if (!bundle) throw new Error('expected bundle, got null');
+    if (!bundle.transcript) throw new Error('expected partial transcript, got null');
+    if (bundle.transcript.events.length !== 2) {
+      throw new Error(`expected 2 parseable events, got ${bundle.transcript.events.length}`);
+    }
+    if (bundle.transcript.status !== 'streaming') {
+      throw new Error(`expected status streaming (from config), got ${bundle.transcript.status}`);
+    }
+    if (bundle.transcript.runFolder !== runFolder) {
+      throw new Error(`runFolder mismatch: ${bundle.transcript.runFolder}`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+await scenario('runManager.init: bumps seq past ring-buffer to avoid Last-Event-ID collisions', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-seq-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    await writeFile(join(storageRoot, '.seq'), JSON.stringify({ seq: 100 }));
+    const rm1 = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+    await rm1.init();
+    // emitHeartbeat is the only public way to allocate a seq; capture it via subscribe.
+    let observed = -1;
+    rm1.subscribe({
+      lastEventId: 0,
+      onEvent: (e) => {
+        if (observed < 0) observed = e.seq;
+      },
+      onClose: () => {},
+    });
+    rm1.emitHeartbeat();
+    if (observed <= 100 + 100) {
+      // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
+      throw new Error(`seq did not advance past ring buffer: first emit seq=${observed}`);
+    }
+    if (observed !== 100 + 2000 + 1) {
+      throw new Error(`expected first emit seq=2101, got ${observed}`);
+    }
+  } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
