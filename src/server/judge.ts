@@ -31,7 +31,6 @@ export interface JudgeInput {
 }
 
 export class JudgeTimeoutError extends Error {
-  readonly isJudgeTimeout = true;
   constructor(message: string) {
     super(message);
     this.name = 'JudgeTimeoutError';
@@ -128,7 +127,11 @@ export function buildJudgePrompt(
   opts: BuildJudgePromptOptions = {},
 ): JudgePromptArtifacts {
   const { runConfig, transcript, variantContent, outputs } = input;
-  const m = opts.bytesCapMultiplier ?? 1;
+  // Default to 1 if the option is missing or non-finite/non-positive; otherwise
+  // multiplier values like NaN or Infinity would propagate through Math.floor and
+  // produce empty or runaway prompt sections.
+  const rawMultiplier = opts.bytesCapMultiplier ?? 1;
+  const m = Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : 1;
   // Floors keep retries useful even if a future caller passes a very small multiplier.
   const promptCap = Math.max(256, Math.floor(JUDGE_PROMPT_CAP_BYTES * m));
   const variantCap = Math.max(512, Math.floor(JUDGE_VARIANT_CAP_BYTES * m));

@@ -523,9 +523,9 @@ async function withTmpRunDir<T>(fn: (runDir: string) => Promise<T>): Promise<T> 
 
 scenario('runJudge: timeout on first attempt triggers retry with halved caps', async () => {
   await withTmpRunDir(async (runDir) => {
-    const calls: { promptLen: number }[] = [];
+    const calls: string[] = [];
     const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
-      calls.push({ promptLen: prompt.length });
+      calls.push(prompt);
       if (calls.length === 1) {
         throw new JudgeTimeoutError('judge subprocess timed out after 120s');
       }
@@ -539,13 +539,16 @@ scenario('runJudge: timeout on first attempt triggers retry with halved caps', a
       throw new Error(`expected 2 spawn calls (initial + retry), got ${calls.length}`);
     }
     // Halved caps must yield a strictly shorter retry prompt.
-    if (!(calls[1]!.promptLen < calls[0]!.promptLen)) {
+    if (!(calls[1]!.length < calls[0]!.length)) {
       throw new Error(
-        `retry prompt should be shorter (halved caps); first=${calls[0]!.promptLen} retry=${calls[1]!.promptLen}`,
+        `retry prompt should be shorter (halved caps); first=${calls[0]!.length} retry=${calls[1]!.length}`,
       );
     }
     // The retry must NOT include the schema-retry hint — that hint is only for
     // parse failures, not timeouts.
+    if (calls[1]!.includes('# Retry required')) {
+      throw new Error('timeout-retry prompt must not include the schema-retry hint header');
+    }
     const judgeFile = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8')) as {
       status: string;
       scores?: { accuracy: number };
