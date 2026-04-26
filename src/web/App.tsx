@@ -78,9 +78,11 @@ function emptyLive(): ColumnLiveState {
 /**
  * Project a persisted normalized transcript onto the live-event shape so a
  * mid-run page refresh still surfaces the prefix. Mirrors the live SSE
- * reducer: same `partial` collapsing rule, drops `message` aggregates (the
- * SSE path never produces them — they're durability dupes of partial
- * content; see claudeStream.ts handleAggregateMessage). Issue #10.
+ * reducer's behavior: same `partial` collapsing rule, and drops `message`
+ * aggregates because the SSE reducer below does not have a `run.message`
+ * branch — even though the server emits those events, the live UI ignores
+ * them (they're durability dupes of the partial content; see
+ * claudeStream.ts handleAggregateMessage). Issue #10.
  */
 function liveStateFromTranscript(events: NormalizedEvent[], startedAtIso: string): ColumnLiveState {
   const startedAtParsed = Date.parse(startedAtIso);

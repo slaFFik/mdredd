@@ -636,21 +636,27 @@ await scenario('transcript.ndjson: events are appended incrementally during the 
         },
       });
       await runner.start();
-      // Sample the on-disk ndjson while the run is still in flight. The fake's
-      // per-turn delay gives the writer time to flush at least one normalized
-      // event before we read.
-      let mid = '';
+      // Sample the on-disk ndjson while the run is still in flight. The
+      // file is being appended to as we read, so a sample can land in the
+      // middle of the last line — only complete lines (those followed by
+      // \n) are guaranteed to be valid JSON.
+      let midLines: string[] = [];
       for (let i = 0; i < 25; i++) {
         await new Promise((r) => setTimeout(r, 40));
-        mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
-        if (mid.split('\n').filter((l) => l.trim()).length >= 1) break;
+        const mid = await readFile(join(runDir, 'transcript.ndjson'), 'utf8').catch(() => '');
+        const endsWithNewline = mid.endsWith('\n');
+        const candidates = mid.split('\n');
+        const completeLines = endsWithNewline ? candidates : candidates.slice(0, -1);
+        const nonEmpty = completeLines.filter((l) => l.trim());
+        if (nonEmpty.length >= 1) {
+          // Each complete line must parse — torn tail was already excluded.
+          for (const line of nonEmpty) JSON.parse(line);
+          midLines = nonEmpty;
+          break;
+        }
       }
-      const midLines = mid.split('\n').filter((l) => l.trim());
       if (midLines.length === 0) {
-        throw new Error('no events appeared in transcript.ndjson before run end');
-      }
-      for (const line of midLines) {
-        JSON.parse(line); // each line must be valid JSON
+        throw new Error('no complete events appeared in transcript.ndjson before run end');
       }
       const final = await runner.wait();
       if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
@@ -762,10 +768,7 @@ await scenario(
         onClose: () => {},
       });
       rm1.emitHeartbeat();
-      if (observed <= 100 + 100) {
-        // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
-        throw new Error(`seq did not advance past ring buffer: first emit seq=${observed}`);
-      }
+      // RING_BUFFER_LIMIT = 2000; first emit must be persisted+2000+1 = 2101.
       if (observed !== 100 + 2000 + 1) {
         throw new Error(`expected first emit seq=2101, got ${observed}`);
       }

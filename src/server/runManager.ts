@@ -16,6 +16,11 @@ import type { ColumnConfig } from '@shared/schemas/session.js';
 
 const SEQ_FILE = '.seq';
 const RING_BUFFER_LIMIT = 2_000;
+// Lower-bound the gap between .seq writes. With Claude streaming many
+// `run.partial` events per second, an unthrottled atomicWriteJson loop
+// (tmp-file + rename per write) would chew real disk; 250ms keeps post-crash
+// gap small without dominating I/O during bursty turns.
+const SEQ_PERSIST_MIN_INTERVAL_MS = 250;
 
 export interface RunManagerOptions {
   claudeBin: string;
@@ -38,6 +43,8 @@ export class RunManager extends EventEmitter {
   private seq = 0;
   private seqDirty = false;
   private seqWriting = false;
+  private seqLastWriteAt = 0;
+  private seqDeferredTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: RunManagerOptions) {
     super();
@@ -123,7 +130,10 @@ export class RunManager extends EventEmitter {
    */
   async stopAll(timeoutMs: number = 5000): Promise<{ stopped: number; timedOut: boolean }> {
     const runners = Array.from(this.active.values());
-    if (runners.length === 0) return { stopped: 0, timedOut: false };
+    if (runners.length === 0) {
+      await this.flushSeqNow();
+      return { stopped: 0, timedOut: false };
+    }
     log.info('runManager.stopAll', { count: runners.length, timeoutMs });
     const drain = Promise.all(
       runners.map(async (r) => {
@@ -145,6 +155,9 @@ export class RunManager extends EventEmitter {
         }, timeoutMs);
       }),
     ]);
+    // Flush latest seq to disk before the process exits, so a client that
+    // reconnects against the next harness boot lines up cleanly.
+    await this.flushSeqNow();
     return { stopped: runners.length, timedOut };
   }
 
@@ -180,15 +193,35 @@ export class RunManager extends EventEmitter {
   }
 
   /**
-   * Debounced seq persist: at most one atomic write in flight; on completion
-   * if more events came in, write again with the latest value. Bounds the
-   * post-crash gap to a single write cycle (typically a few ms) instead of
-   * the previous 25-event window — clients reconnecting via the in-memory
-   * ring are far less likely to hit the +RING_BUFFER_LIMIT bump path.
+   * Persist seq with two layers of coalescing:
+   *  - at most one atomic write in flight (single-flight),
+   *  - a SEQ_PERSIST_MIN_INTERVAL_MS floor between successive writes so a
+   *    `run.partial` storm doesn't translate to one tmp-file+rename per
+   *    delta.
+   * On `seqDirty` arriving while throttled, a single deferred timer is
+   * scheduled to flush after the floor elapses; further dirty marks coalesce
+   * into that pending flush. Bounds post-crash gap to ~250ms of events.
    */
   private schedulePersistSeq(): void {
     this.seqDirty = true;
     if (this.seqWriting) return;
+    const now = Date.now();
+    const sinceLast = now - this.seqLastWriteAt;
+    if (sinceLast < SEQ_PERSIST_MIN_INTERVAL_MS) {
+      if (this.seqDeferredTimer === null) {
+        this.seqDeferredTimer = setTimeout(() => {
+          this.seqDeferredTimer = null;
+          this.startSeqWrite();
+        }, SEQ_PERSIST_MIN_INTERVAL_MS - sinceLast);
+        this.seqDeferredTimer.unref();
+      }
+      return;
+    }
+    this.startSeqWrite();
+  }
+
+  private startSeqWrite(): void {
+    if (this.seqWriting || !this.seqDirty) return;
     this.seqWriting = true;
     void this.flushSeq();
   }
@@ -199,11 +232,36 @@ export class RunManager extends EventEmitter {
       const current = this.seq;
       try {
         await atomicWriteJson(join(this.opts.storageRoot, SEQ_FILE), { seq: current });
+        this.seqLastWriteAt = Date.now();
       } catch (err) {
         log.warn('runManager.seq-persist-failed', { error: (err as Error).message });
       }
     }
     this.seqWriting = false;
+    // If more events came in mid-write while throttled, reschedule.
+    if (this.seqDirty) this.schedulePersistSeq();
+  }
+
+  /**
+   * Force-flush any pending seq write. Called on graceful shutdown so the
+   * latest seq value lands on disk before the process exits.
+   */
+  async flushSeqNow(): Promise<void> {
+    if (this.seqDeferredTimer !== null) {
+      clearTimeout(this.seqDeferredTimer);
+      this.seqDeferredTimer = null;
+    }
+    if (!this.seqDirty && !this.seqWriting) return;
+    if (this.seqWriting) {
+      // Wait for the in-flight write to drain; flushSeq's loop will pick up
+      // any remaining seqDirty marks before resolving.
+      while (this.seqWriting) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return;
+    }
+    this.seqWriting = true;
+    await this.flushSeq();
   }
 
   emitHeartbeat(): void {

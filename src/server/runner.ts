@@ -42,6 +42,15 @@ export interface RunnerEvents {
 const STDIN_BLOCK_KILL_MS = 15_000;
 const SIGKILL_GRACE_MS = 2_000;
 
+function endStream(s: WriteStream | null): Promise<void> {
+  if (!s) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    s.once('finish', resolve);
+    s.once('error', () => resolve()); // already logged via on('error') handler
+    s.end();
+  });
+}
+
 export class Runner extends EventEmitter {
   private child: ChildProcess | null = null;
   private parser = new ClaudeStreamParser();
@@ -107,10 +116,29 @@ export class Runner extends EventEmitter {
     });
     // Append-only normalized event log. Persisted incrementally so a browser
     // refresh or harness crash mid-run can replay the prefix from disk —
-    // transcript.json is only written at finalize() (issue #10).
+    // transcript.json is only written at finalize() (issue #10). Note: write
+    // is buffered like the other log streams (no fsync); the on-disk prefix
+    // converges within a few ms of each emit, which is enough to keep
+    // /api/state useful across page refreshes.
     this.transcriptLog = createWriteStream(join(this.input.runDir, 'transcript.ndjson'), {
       flags: 'a',
     });
+    // Defensive error handlers: an EBADF / ENOSPC mid-run would otherwise
+    // bubble as an uncaughtException and tear down the harness. Log and let
+    // the run finalize normally; the partial transcript on disk stays valid
+    // up to the last successful write.
+    this.streamLog.on('error', (err) =>
+      log.warn('runner.stream-log-error', { error: err.message }),
+    );
+    this.stderrLog.on('error', (err) =>
+      log.warn('runner.stderr-log-error', { error: err.message }),
+    );
+    this.parseErrorsLog.on('error', (err) =>
+      log.warn('runner.parse-errors-log-error', { error: err.message }),
+    );
+    this.transcriptLog.on('error', (err) =>
+      log.warn('runner.transcript-log-error', { error: err.message }),
+    );
 
     await this.persistConfig();
 
@@ -147,8 +175,9 @@ export class Runner extends EventEmitter {
     });
     this.parser.on('normalized', (e) => {
       this.events.push(e);
-      // Persist before emitting: if the harness dies between write and emit,
-      // the on-disk log is the source of truth for /api/state replay.
+      // Queue the line for the ndjson log before emitting to live SSE
+      // subscribers. The write is buffered, not awaited — see the comment
+      // above transcriptLog creation.
       this.transcriptLog?.write(JSON.stringify(e) + '\n');
       this.emit('normalized', e);
     });
@@ -297,10 +326,14 @@ export class Runner extends EventEmitter {
 
     Promise.resolve()
       .then(async () => {
+        // Await the transcript ndjson stream's flush so callers awaiting
+        // wait() see a fully-flushed prefix on disk; the other logs stay
+        // best-effort end() since nothing reads them synchronously after
+        // the run.
+        await endStream(this.transcriptLog);
         this.streamLog?.end();
         this.stderrLog?.end();
         this.parseErrorsLog?.end();
-        this.transcriptLog?.end();
 
         const transcript: TranscriptFile = {
           runFolder: cfg.runFolder,

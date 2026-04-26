@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { atomicWriteJson, ensureDir, isNotFound, pathExists, readJsonIfExists } from './fsUtil.js';
 import { SESSION_FILE, GITIGNORE_FILE, LOCK_FILE } from '@shared/constants.js';
 import {
@@ -150,9 +150,6 @@ export class SessionStore {
     await atomicWriteJson(join(this.storageRoot, SESSION_FILE), this.session);
   }
 }
-
-// Suppress unused import — writeFile is reserved for potential future atomic-patch paths.
-void writeFile;
 
 /**
  * Reconstruct a partial TranscriptFile from the append-only `transcript.ndjson`
