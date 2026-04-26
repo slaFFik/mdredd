@@ -382,6 +382,10 @@ export class Runner extends EventEmitter {
       },
     );
 
+    if (typeof raw.model === 'string' && raw.model.length > 0) {
+      this.input.initialConfig.resolvedModel = raw.model;
+    }
+
     const memoryPaths = raw.memory_paths as Record<string, unknown> | undefined;
     const auto = memoryPaths?.auto;
     if (typeof auto !== 'string' || auto.length === 0) return;

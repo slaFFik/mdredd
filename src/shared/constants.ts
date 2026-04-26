@@ -26,6 +26,12 @@ export const PROJECT_MARKERS = [
 // when a new Haiku ships and rebaselining is acceptable.
 export const JUDGE_MODEL = 'claude-haiku-4-5';
 
+// Model used to auto-generate run-folder slugs from variant content. Kept
+// separate from JUDGE_MODEL so the slug generator can move independently —
+// slugs are non-critical (they fall back gracefully) and don't anchor any
+// historical comparison the way judge scores do.
+export const SLUG_MODEL = 'claude-haiku-4-5';
+
 // Judge input budgets (plan § Judge flow step 2).
 export const JUDGE_PROMPT_CAP_BYTES = 4 * 1024;
 export const JUDGE_VARIANT_CAP_BYTES = 8 * 1024;

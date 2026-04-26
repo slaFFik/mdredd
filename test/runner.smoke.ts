@@ -485,6 +485,9 @@ await scenario('init.json: persisted with the system init payload', async () => 
     if (typeof init.session_id !== 'string' || !init.session_id.startsWith('fake-')) {
       throw new Error(`init.json session_id unexpected: ${init.session_id}`);
     }
+    if (final.resolvedModel !== 'haiku') {
+      throw new Error(`expected resolvedModel='haiku', got ${final.resolvedModel}`);
+    }
   });
 });
 

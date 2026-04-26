@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { pathExists } from './fsUtil.js';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
+import { SLUG_MODEL } from '@shared/constants.js';
 import { log } from './log.js';
 
 const MAX_SLUG_LENGTH = 32;
@@ -129,7 +130,7 @@ async function tryHaikuSlug(content: string, claudeBin: string): Promise<string 
         '-p',
         prompt,
         '--model',
-        'haiku',
+        SLUG_MODEL,
         '--output-format',
         'json',
         '--tools',
