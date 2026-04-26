@@ -209,13 +209,13 @@ export function VariantColumn(props: {
 
       <VariantEditor
         value={column.variantContent}
-        disabled={isStreaming}
+        disabled={isLocked}
         onChange={(v) => void props.onPatchColumn(column.id, { variantContent: v })}
       />
 
       <PromptField
         value={column.prompt}
-        disabled={isStreaming}
+        disabled={isLocked}
         onChange={(v) => void props.onPatchColumn(column.id, { prompt: v })}
       />
 
@@ -270,11 +270,12 @@ export function VariantColumn(props: {
         </div>
       )}
 
-      {runBundle?.judge ? (
-        <JudgeCard judge={runBundle.judge} />
-      ) : isJudging ? (
-        <JudgeCard judging />
-      ) : null}
+      {!isStreaming &&
+        (runBundle?.judge ? (
+          <JudgeCard judge={runBundle.judge} />
+        ) : isJudging ? (
+          <JudgeCard judging />
+        ) : null)}
     </div>
   );
 }
