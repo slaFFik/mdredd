@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import getPort from 'get-port';
 import open from 'open';
-import { runPreflight, writeLock, releaseLock } from './preflight.js';
+import { runPreflight, writeLockMeta } from './preflight.js';
 import { SessionStore } from './session.js';
 import { RunManager } from './runManager.js';
 import { createRouter } from './routes.js';
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   });
 
   server.listen(port, '127.0.0.1', async () => {
-    await writeLock(preflight.lockFilePath, process.pid, port);
+    await writeLockMeta(preflight.lockFilePath, process.pid, port);
     const url = `${auth.origin}/?t=${auth.token}`;
     log.info('server.listening', { url, pid: process.pid });
     console.log(`mdredd listening at ${url}`);
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       if (result.timedOut) {
         log.warn('server.shutdown.stopAll-timeout', { stopped: result.stopped });
       }
-      await releaseLock(preflight.lockFilePath);
+      await preflight.releaseLock();
     } catch (err) {
       log.error('server.shutdown-error', { error: (err as Error).message });
     } finally {

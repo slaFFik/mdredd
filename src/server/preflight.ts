@@ -4,7 +4,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
 import { PROJECT_MARKERS, STORAGE_DIR_NAME } from '@shared/constants.js';
-import { readdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import lockfile from 'proper-lockfile';
 import { log } from './log.js';
 
 const execFileAsync = promisify(execFile);
@@ -18,8 +19,13 @@ export interface PreflightInput {
 export interface PreflightResult {
   storageRoot: string;
   lockFilePath: string;
-  ownedLock: boolean;
+  releaseLock: () => Promise<void>;
 }
+
+// Threshold (ms) past which a lockfile is considered stale and may be
+// reclaimed. proper-lockfile refreshes the lockfile's mtime every stale/2
+// while the holder is alive; after a crash it is reclaimable after `stale` ms.
+const LOCK_STALE_MS = 30_000;
 
 export class PreflightError extends Error {
   code: string;
@@ -39,9 +45,9 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   const lockFilePath = join(storageRoot, '.lock');
   await ensureDir(storageRoot);
   await ensureAutoGitignore(storageRoot);
-  await acquireLock(lockFilePath);
+  const releaseLock = await acquireLock(storageRoot, lockFilePath);
   await recoverAbandonedRuns(storageRoot);
-  return { storageRoot, lockFilePath, ownedLock: true };
+  return { storageRoot, lockFilePath, releaseLock };
 }
 
 async function checkClaudeCli(bin: string): Promise<void> {
@@ -242,41 +248,65 @@ async function ensureAutoGitignore(storageRoot: string): Promise<void> {
   await atomicWriteFile(gitignorePath, '*\n!.gitignore\n');
 }
 
-async function acquireLock(lockFilePath: string): Promise<void> {
-  const existing = await readJsonIfExists<{ pid: number; port: number; startedAt: string }>(
-    lockFilePath,
-  );
-  if (existing && isAlive(existing.pid)) {
-    throw new PreflightError(
-      'instance-running',
-      `Another mdredd instance appears to be running (pid ${existing.pid}, port ${existing.port}).`,
-      `Close it first, or remove ${lockFilePath} if you are sure it is stale.`,
-    );
-  }
-  if (existing) {
-    log.info('preflight.stale-lock-recovered', { pid: existing.pid });
-    await unlink(lockFilePath).catch(() => undefined);
+function lockMetaPath(lockFilePath: string): string {
+  return `${lockFilePath}.meta.json`;
+}
+
+// Older versions wrote a JSON file at `.lock`. proper-lockfile uses that path
+// as a directory (mkdir-based), so a stale legacy file would block startup
+// forever. Remove it before attempting to acquire.
+async function migrateLegacyLock(lockFilePath: string): Promise<void> {
+  try {
+    const st = await stat(lockFilePath);
+    if (st.isFile()) {
+      await unlink(lockFilePath).catch(() => undefined);
+      log.info('preflight.legacy-lock-removed', { path: lockFilePath });
+    }
+  } catch {
+    // not present — nothing to migrate
   }
 }
 
-export async function writeLock(lockFilePath: string, pid: number, port: number): Promise<void> {
-  await writeFile(
-    lockFilePath,
+async function acquireLock(
+  storageRoot: string,
+  lockFilePath: string,
+): Promise<() => Promise<void>> {
+  await migrateLegacyLock(lockFilePath);
+  const metaPath = lockMetaPath(lockFilePath);
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(storageRoot, {
+      lockfilePath: lockFilePath,
+      stale: LOCK_STALE_MS,
+      realpath: false,
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ELOCKED') {
+      const meta = await readJsonIfExists<{ pid: number; port: number }>(metaPath);
+      const info = meta ? ` (pid ${meta.pid}, port ${meta.port})` : '';
+      throw new PreflightError(
+        'instance-running',
+        `Another mdredd instance appears to be running${info}.`,
+        `Close it first, or remove ${lockFilePath} if you are sure it is stale.`,
+      );
+    }
+    throw err;
+  }
+  return async () => {
+    await release().catch(() => undefined);
+    await unlink(metaPath).catch(() => undefined);
+  };
+}
+
+export async function writeLockMeta(
+  lockFilePath: string,
+  pid: number,
+  port: number,
+): Promise<void> {
+  await atomicWriteFile(
+    lockMetaPath(lockFilePath),
     JSON.stringify({ pid, port, startedAt: new Date().toISOString() }, null, 2),
   );
-}
-
-export async function releaseLock(lockFilePath: string): Promise<void> {
-  await unlink(lockFilePath).catch(() => undefined);
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 async function recoverAbandonedRuns(storageRoot: string): Promise<void> {
