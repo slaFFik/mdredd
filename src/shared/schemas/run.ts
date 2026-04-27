@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  EffortSchema,
   ModeSchema,
   ModelIdSchema,
   RunStatusSchema,
@@ -31,6 +32,10 @@ export const RunConfigSchema = z.object({
   // this captures what actually ran, so reruns across an alias bump remain
   // comparable. Optional/nullable for back-compat with pre-existing configs.
   resolvedModel: ModelIdSchema.nullable().optional(),
+  // Reasoning effort passed to `claude --effort`. Null means the flag was
+  // omitted (CLI default). Optional+default keeps historical run configs
+  // (written before this field existed) parsing cleanly.
+  effort: EffortSchema.nullable().optional().default(null),
   mode: ModeSchema,
   status: RunStatusSchema,
   startedAt: z.string(),

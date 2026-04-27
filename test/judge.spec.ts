@@ -215,6 +215,7 @@ function makeRunConfig(overrides: Partial<RunConfig> = {}): RunConfig {
     promptSha256: 'sha-p',
     prompt: 'do the thing',
     model: 'sonnet',
+    effort: null,
     mode: 'read-only',
     status: 'completed',
     startedAt: '2026-04-25T00:00:00Z',

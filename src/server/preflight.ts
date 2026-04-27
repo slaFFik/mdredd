@@ -77,6 +77,7 @@ async function checkClaudeCli(bin: string): Promise<void> {
       '--strict-mcp-config',
       '--setting-sources',
       '--model',
+      '--effort',
       '--json-schema',
     ];
     const missing = required.filter((flag) => !stdout.includes(flag));
