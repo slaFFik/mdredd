@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -6,11 +6,14 @@ import {
   buildJudgePrompt,
   extractFinalAssistantMessage,
   extractToolSummary,
+  readOutputContents,
   runJudge,
+  type OutputFileContent,
   type SpawnJudgeFn,
 } from '../src/server/judge.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
 import type { OutputFile, RunConfig, TranscriptFile } from '@shared/schemas/run.js';
+import { JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES } from '@shared/constants.js';
 
 const NO_FINAL = '(no final message emitted)';
 
@@ -602,6 +605,194 @@ scenario('runJudge: parse-failure retry path still works (regression)', async ()
       throw new Error('schema-retry prompt should include the retry hint header');
     }
   });
+});
+
+// --- write-mode output content (option 2 from investigation) -------------
+
+scenario('buildJudgePrompt: write mode includes file content when contents pre-loaded', () => {
+  const outputContents: OutputFileContent[] = [
+    {
+      path: 'note.md',
+      bytes: 11,
+      content: 'hello world',
+      truncated: false,
+      omitted: false,
+      binary: false,
+    },
+  ];
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [{ path: 'note.md', bytes: 11 }],
+    outputContents,
+  });
+  expectIncludes(prompt, '## Files the variant produced', 'has files heading');
+  expectIncludes(prompt, '### note.md (11 bytes)', 'has per-file header');
+  expectIncludes(prompt, 'hello world', 'has file content');
+});
+
+scenario('buildJudgePrompt: write mode falls back to manifest when contents undefined', () => {
+  // buildJudgePrompt is sync and tests sometimes pass without pre-loading.
+  // Production calls go through invokeJudge which always pre-loads.
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [{ path: 'a.txt', bytes: 4 }],
+  });
+  expectIncludes(prompt, 'a.txt', 'mentions filename');
+  expectIncludes(prompt, 'content unavailable', 'flags missing content');
+});
+
+scenario('buildJudgePrompt: per-file cap mid-ellipses large content', () => {
+  const big = 'A'.repeat(20_000);
+  const outputContents: OutputFileContent[] = [
+    {
+      path: 'big.txt',
+      bytes: big.length,
+      content: big,
+      truncated: false,
+      omitted: false,
+      binary: false,
+    },
+  ];
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [{ path: 'big.txt', bytes: big.length }],
+    outputContents,
+  });
+  // Mid-ellipsis marker carries the original byte count after cap.
+  expectMatches(prompt, /\[truncated \d+ bytes\]/, 'mid-ellipsis marker present');
+  // Cap is 4 KiB — full 20K cannot be present.
+  if (prompt.length > 30_000) {
+    throw new Error(`prompt should be bounded by per-file cap; got ${prompt.length}`);
+  }
+});
+
+scenario('buildJudgePrompt: aggregate output cap drops later files', () => {
+  // Five 4 KiB files = 20 KiB raw. Total cap is 16 KiB so at least one tail
+  // file should land in the omitted state.
+  const big = 'B'.repeat(4 * 1024);
+  const files: OutputFile[] = [
+    { path: 'a.txt', bytes: big.length },
+    { path: 'b.txt', bytes: big.length },
+    { path: 'c.txt', bytes: big.length },
+    { path: 'd.txt', bytes: big.length },
+    { path: 'e.txt', bytes: big.length },
+  ];
+  const outputContents: OutputFileContent[] = files.map((f) => ({
+    path: f.path,
+    bytes: f.bytes,
+    content: big,
+    truncated: false,
+    omitted: false,
+    binary: false,
+  }));
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: files,
+    outputContents,
+  });
+  expectIncludes(prompt, 'omitted: section budget reached', 'tail file marked omitted');
+});
+
+scenario('buildJudgePrompt: tool-summary section is capped in aggregate', () => {
+  // 200 tool calls × ≈1 KiB results ≈ 200 KiB raw. Section cap is 32 KiB so
+  // the head (oldest) calls should be dropped with an "omitted" marker.
+  const events: NormalizedEvent[] = [];
+  for (let i = 0; i < 200; i++) {
+    events.push(toolUse('Read', 'r-args-' + i, `tu-${i}`));
+    events.push(toolResult('Read', 'X'.repeat(1024), { id: `tu-${i}` }));
+  }
+  events.push(assistantMessage([textBlock('done')]));
+  events.push(turn(1));
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript(events),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectMatches(prompt, /\[\d+ earlier tool calls? omitted\]/, 'omitted marker present');
+  // Bounded by section cap (+ all the other sections).
+  const toolSectionStart = prompt.indexOf('## Tool calls (summary)');
+  const filesSectionStart = prompt.indexOf('## Run metadata');
+  const toolSectionLen = filesSectionStart - toolSectionStart;
+  if (toolSectionLen > JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES + 4_096) {
+    throw new Error(
+      `tool section should be near total cap, got ${toolSectionLen} bytes (cap ${JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES})`,
+    );
+  }
+});
+
+scenario('readOutputContents: reads files, caps each, drops binary', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mdredd-judge-outputs-'));
+  try {
+    const outputsDir = join(dir, 'outputs');
+    mkdirSync(outputsDir, { recursive: true });
+    writeFileSync(join(outputsDir, 'small.txt'), 'tiny');
+    const big = 'B'.repeat(20_000);
+    writeFileSync(join(outputsDir, 'big.txt'), big);
+    writeFileSync(join(outputsDir, 'binary.bin'), Buffer.from([0x00, 0x01, 0x02, 0x00]));
+    const result = await readOutputContents(
+      dir,
+      [
+        { path: 'small.txt', bytes: 4 },
+        { path: 'big.txt', bytes: big.length },
+        { path: 'binary.bin', bytes: 4 },
+      ],
+      4 * 1024,
+      16 * 1024,
+    );
+    if (result.length !== 3) throw new Error(`expected 3 entries, got ${result.length}`);
+    if (result[0]!.content !== 'tiny') throw new Error('small file content wrong');
+    if (!result[1]!.truncated) throw new Error('big file should be truncated');
+    if (result[1]!.content.length >= big.length) {
+      throw new Error('big file content not capped');
+    }
+    if (!result[2]!.binary) throw new Error('binary file should be flagged');
+    if (result[2]!.content.includes('\x00')) throw new Error('binary content leaked into prompt');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+scenario('readOutputContents: aggregate cap omits later files', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mdredd-judge-outputs-agg-'));
+  try {
+    const outputsDir = join(dir, 'outputs');
+    mkdirSync(outputsDir, { recursive: true });
+    const filler = 'F'.repeat(4 * 1024);
+    writeFileSync(join(outputsDir, 'a.txt'), filler);
+    writeFileSync(join(outputsDir, 'b.txt'), filler);
+    writeFileSync(join(outputsDir, 'c.txt'), filler);
+    writeFileSync(join(outputsDir, 'd.txt'), filler);
+    const result = await readOutputContents(
+      dir,
+      ['a.txt', 'b.txt', 'c.txt', 'd.txt'].map((path) => ({ path, bytes: filler.length })),
+      4 * 1024,
+      8 * 1024, // only first two should fit
+    );
+    if (!result[2]!.omitted && !result[3]!.omitted) {
+      throw new Error('expected at least one tail file to be omitted by aggregate cap');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 scenario('buildJudgePrompt: bytesCapMultiplier of 0.5 shrinks bounded sections', () => {

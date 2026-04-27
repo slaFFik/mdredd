@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSON5 from 'json5';
@@ -9,6 +10,9 @@ import {
   JUDGE_VARIANT_CAP_BYTES,
   JUDGE_FINAL_MESSAGE_CAP_BYTES,
   JUDGE_TOOL_SUMMARY_CAP_CHARS,
+  JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES,
+  JUDGE_OUTPUT_FILE_CAP_BYTES,
+  JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
 } from '@shared/constants.js';
 import {
   JUDGE_MODEL_JSON_SCHEMA,
@@ -28,6 +32,23 @@ export interface JudgeInput {
   transcript: TranscriptFile;
   variantContent: string;
   outputs: OutputFile[];
+  // Pre-read file contents for write-mode runs. Production calls leave this
+  // undefined; `invokeJudge` fills it from disk before building the prompt.
+  // Tests can set it directly to bypass the filesystem.
+  outputContents?: OutputFileContent[];
+}
+
+export interface OutputFileContent {
+  path: string;
+  bytes: number;
+  // Empty string when omitted=true or the file looked binary.
+  content: string;
+  truncated: boolean;
+  // True when the per-file or aggregate cap dropped this entry entirely.
+  omitted: boolean;
+  // True when the file's bytes contained a NUL — we don't ship raw binary into
+  // the judge prompt.
+  binary: boolean;
 }
 
 export class JudgeTimeoutError extends Error {
@@ -126,7 +147,7 @@ export function buildJudgePrompt(
   input: JudgeInput,
   opts: BuildJudgePromptOptions = {},
 ): JudgePromptArtifacts {
-  const { runConfig, transcript, variantContent, outputs } = input;
+  const { runConfig, transcript, variantContent, outputs, outputContents } = input;
   // Default to 1 if the option is missing or non-finite/non-positive; otherwise
   // multiplier values like NaN or Infinity would propagate through Math.floor and
   // produce empty or runaway prompt sections.
@@ -137,6 +158,9 @@ export function buildJudgePrompt(
   const variantCap = Math.max(512, Math.floor(JUDGE_VARIANT_CAP_BYTES * m));
   const finalMessageCap = Math.max(256, Math.floor(JUDGE_FINAL_MESSAGE_CAP_BYTES * m));
   const toolSummaryCap = Math.max(80, Math.floor(JUDGE_TOOL_SUMMARY_CAP_CHARS * m));
+  const toolSectionCap = Math.max(2048, Math.floor(JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES * m));
+  const outputFileCap = Math.max(512, Math.floor(JUDGE_OUTPUT_FILE_CAP_BYTES * m));
+  const outputsSectionCap = Math.max(2048, Math.floor(JUDGE_OUTPUTS_TOTAL_CAP_BYTES * m));
   // 64 bits of entropy each: too large to brute-force a guess from inside the
   // sandboxed variant, so the data fences and canary cannot be forged.
   const nonce = randomBytes(8).toString('hex');
@@ -191,17 +215,20 @@ export function buildJudgePrompt(
   lines.push('');
 
   const tools = extractToolSummary(transcript, toolSummaryCap);
+  const toolsBody = tools.length === 0 ? '(none)' : capLinesFromHead(tools, toolSectionCap);
   lines.push('## Tool calls (summary)');
-  lines.push(fence('tool summary', tools.length === 0 ? '(none)' : tools.join('\n')));
+  lines.push(fence('tool summary', toolsBody));
   lines.push('');
 
   if (runConfig.mode === 'write') {
-    const manifest =
-      outputs.length === 0
-        ? '(no files produced)'
-        : outputs.map((f) => `- ${f.path} (${f.bytes} bytes)`).join('\n');
-    lines.push('## Files the variant produced (manifest only; no content)');
-    lines.push(fence('file manifest', manifest));
+    const filesBody = formatOutputsSection(
+      outputs,
+      outputContents,
+      outputFileCap,
+      outputsSectionCap,
+    );
+    lines.push('## Files the variant produced');
+    lines.push(fence('files', filesBody));
     lines.push('');
   }
 
@@ -328,6 +355,129 @@ function bytesCap(s: string, cap: number): string {
   return buf.subarray(0, cap).toString('utf8') + '\n…[truncated]';
 }
 
+// Drop oldest lines until the joined body fits in `cap` bytes. The most recent
+// tool calls are closest to the final assistant message and most informative
+// for scoring, so keep them; prepend a marker noting how many earlier calls
+// were dropped so the judge sees the gap exists.
+function capLinesFromHead(lines: string[], cap: number): string {
+  const joined = lines.join('\n');
+  if (Buffer.byteLength(joined, 'utf8') <= cap) return joined;
+  let kept = lines.length;
+  while (kept > 0) {
+    const omitted = lines.length - kept;
+    const candidate =
+      `…[${omitted} earlier tool call${omitted === 1 ? '' : 's'} omitted]\n` +
+      lines.slice(lines.length - kept).join('\n');
+    if (Buffer.byteLength(candidate, 'utf8') <= cap) return candidate;
+    kept--;
+  }
+  return `…[${lines.length} tool calls omitted; section over budget]`;
+}
+
+export async function readOutputContents(
+  runDir: string,
+  outputs: OutputFile[],
+  perFileCap: number = JUDGE_OUTPUT_FILE_CAP_BYTES,
+  totalCap: number = JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
+): Promise<OutputFileContent[]> {
+  const out: OutputFileContent[] = [];
+  let used = 0;
+  for (const f of outputs) {
+    if (used >= totalCap) {
+      out.push({ path: f.path, bytes: f.bytes, content: '', truncated: false, omitted: true, binary: false });
+      continue;
+    }
+    let raw: Buffer;
+    try {
+      raw = await readFile(join(runDir, 'outputs', f.path));
+    } catch (err) {
+      log.warn('judge.output-read-failed', { path: f.path, error: (err as Error).message });
+      out.push({
+        path: f.path,
+        bytes: f.bytes,
+        content: '(read failed)',
+        truncated: false,
+        omitted: false,
+        binary: false,
+      });
+      continue;
+    }
+    if (raw.includes(0)) {
+      out.push({
+        path: f.path,
+        bytes: f.bytes,
+        content: '(binary file omitted)',
+        truncated: false,
+        omitted: false,
+        binary: true,
+      });
+      used += 30;
+      continue;
+    }
+    const remaining = Math.max(0, totalCap - used);
+    const effectiveCap = Math.min(perFileCap, remaining);
+    const text = raw.toString('utf8');
+    const truncated = Buffer.byteLength(text, 'utf8') > effectiveCap;
+    const content = truncated ? midEllipsis(text, effectiveCap) : text;
+    used += Buffer.byteLength(content, 'utf8');
+    out.push({
+      path: f.path,
+      bytes: f.bytes,
+      content,
+      truncated,
+      omitted: false,
+      binary: false,
+    });
+  }
+  return out;
+}
+
+function formatOutputsSection(
+  outputs: OutputFile[],
+  contents: OutputFileContent[] | undefined,
+  perFileCap: number,
+  totalCap: number,
+): string {
+  if (outputs.length === 0) return '(no files produced)';
+  // No contents pre-loaded: degrade to manifest-only so we never expose the
+  // judge to "this section was promised but missing".
+  if (!contents) {
+    return outputs.map((f) => `- ${f.path} (${f.bytes} bytes) [content unavailable]`).join('\n');
+  }
+  const byPath = new Map(contents.map((c) => [c.path, c] as const));
+  const blocks: string[] = [];
+  let used = 0;
+  for (const f of outputs) {
+    const c = byPath.get(f.path);
+    const header = `### ${f.path} (${f.bytes} bytes)`;
+    if (!c || c.omitted) {
+      blocks.push(`${header}\n[omitted: section budget reached]`);
+      continue;
+    }
+    if (c.binary) {
+      blocks.push(`${header}\n${c.content}`);
+      used += header.length + c.content.length;
+      continue;
+    }
+    // Re-apply the (possibly retry-shrunk) per-file cap. midEllipsis is a
+    // no-op when content already fits.
+    const remaining = Math.max(0, totalCap - used);
+    const effective = Math.min(perFileCap, remaining);
+    const trimmed = effective > 0 ? midEllipsis(c.content, effective) : '[omitted: section budget reached]';
+    const noteParts: string[] = [];
+    if (c.truncated || trimmed !== c.content) noteParts.push('truncated');
+    const note = noteParts.length > 0 ? ` [${noteParts.join(', ')}]` : '';
+    const block = `${header}${note}\n${trimmed}`;
+    blocks.push(block);
+    used += Buffer.byteLength(block, 'utf8');
+    if (used >= totalCap) {
+      // Mark any remaining files as omitted in subsequent iterations.
+      // (Loop continues only to emit the omission markers.)
+    }
+  }
+  return blocks.join('\n\n');
+}
+
 function midEllipsis(s: string, cap: number): string {
   const buf = Buffer.from(s, 'utf8');
   if (buf.byteLength <= cap) return s;
@@ -382,7 +532,14 @@ export async function invokeJudge(
   spawnFn: SpawnJudgeFn = spawnJudge,
 ): Promise<JudgeModelOutput> {
   const { claudeBin, runDir } = input;
-  const built = buildJudgePrompt(input);
+  // Pre-read output files once so the (possibly halved-cap) retry can re-trim
+  // the same in-memory bytes instead of touching disk twice.
+  const outputContents =
+    input.runConfig.mode === 'write' && input.outputContents === undefined
+      ? await readOutputContents(input.runDir, input.outputs)
+      : input.outputContents;
+  const enriched: JudgeInput = { ...input, outputContents };
+  const built = buildJudgePrompt(enriched);
 
   const first = await attemptJudge(spawnFn, claudeBin, built.prompt, built.canary, runDir, 'first');
   if (first.ok) return first.value;
@@ -399,7 +556,7 @@ export async function invokeJudge(
       error: first.error,
       retryStrategy: 'halve-input-caps',
     });
-    const rebuilt = buildJudgePrompt(input, { bytesCapMultiplier: 0.5 });
+    const rebuilt = buildJudgePrompt(enriched, { bytesCapMultiplier: 0.5 });
     retryPrompt = rebuilt.prompt;
     retryCanary = rebuilt.canary;
   } else {
