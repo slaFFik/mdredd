@@ -4,7 +4,6 @@ import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
 import {
   defaultEffortForModel,
   effortLevelsForModel,
-  modelSupportsEffort,
   type Effort,
 } from '@shared/constants.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
@@ -149,7 +148,7 @@ export function VariantColumn(props: {
             ))}
           </select>
         </Hint>
-        {modelSupportsEffort(column.model) && (
+        {effortLevelsForModel(column.model).length > 0 && (
           <Hint content="Reasoning effort for the variant run">
             <select
               value={column.effort ?? ''}

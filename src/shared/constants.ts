@@ -38,30 +38,44 @@ export const JUDGE_VARIANT_CAP_BYTES = 8 * 1024;
 export const JUDGE_FINAL_MESSAGE_CAP_BYTES = 4 * 1024;
 export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 200;
 
-// Effort levels accepted by `claude --effort`. Order matches the CLI help.
+// Effort levels accepted by `claude --effort`. Used as the Zod enum universe;
+// each model exposes its own subset below.
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
-// Effort levels each model actually supports. xhigh is opus-only (Sonnet 4.6
-// rejects it). Haiku has no effort support and returns an empty list.
-const SONNET_EFFORTS = ['low', 'medium', 'high', 'max'] as const satisfies readonly Effort[];
+// Per-model effort menus. xhigh is opus-only (Sonnet 4.6 rejects it). Haiku
+// has no effort support — its empty array tells the UI to hide the dropdown.
+export const OPUS_EFFORTS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const satisfies readonly Effort[];
+export const SONNET_EFFORTS = [
+  'low',
+  'medium',
+  'high',
+  'max',
+] as const satisfies readonly Effort[];
+export const HAIKU_EFFORTS = [] as const satisfies readonly Effort[];
+
+// Default effort pre-selected when each model is chosen. Haiku is null →
+// spawn omits --effort entirely.
+export const OPUS_EFFORT_DEFAULT: Effort = 'xhigh';
+export const SONNET_EFFORT_DEFAULT: Effort = 'high';
+export const HAIKU_EFFORT_DEFAULT: Effort | null = null;
 
 export function effortLevelsForModel(model: string): readonly Effort[] {
-  if (model === 'opus') return EFFORT_LEVELS;
+  if (model === 'opus') return OPUS_EFFORTS;
   if (model === 'sonnet') return SONNET_EFFORTS;
-  if (model === 'haiku') return [];
+  if (model === 'haiku') return HAIKU_EFFORTS;
   return [];
 }
 
-// Default effort to pre-select when a model is chosen. Haiku does not support
-// effort, so it returns null and the spawn omits --effort entirely.
 export function defaultEffortForModel(model: string): Effort | null {
-  if (model === 'opus') return 'xhigh';
-  if (model === 'sonnet') return 'high';
-  if (model === 'haiku') return null;
+  if (model === 'opus') return OPUS_EFFORT_DEFAULT;
+  if (model === 'sonnet') return SONNET_EFFORT_DEFAULT;
+  if (model === 'haiku') return HAIKU_EFFORT_DEFAULT;
   return null;
-}
-
-export function modelSupportsEffort(model: string): boolean {
-  return effortLevelsForModel(model).length > 0;
 }
