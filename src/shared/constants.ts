@@ -42,6 +42,17 @@ export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 200;
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORT_LEVELS)[number];
 
+// Effort levels each model actually supports. xhigh is opus-only (Sonnet 4.6
+// rejects it). Haiku has no effort support and returns an empty list.
+const SONNET_EFFORTS = ['low', 'medium', 'high', 'max'] as const satisfies readonly Effort[];
+
+export function effortLevelsForModel(model: string): readonly Effort[] {
+  if (model === 'opus') return EFFORT_LEVELS;
+  if (model === 'sonnet') return SONNET_EFFORTS;
+  if (model === 'haiku') return [];
+  return [];
+}
+
 // Default effort to pre-select when a model is chosen. Haiku does not support
 // effort, so it returns null and the spawn omits --effort entirely.
 export function defaultEffortForModel(model: string): Effort | null {
@@ -52,5 +63,5 @@ export function defaultEffortForModel(model: string): Effort | null {
 }
 
 export function modelSupportsEffort(model: string): boolean {
-  return model !== 'haiku';
+  return effortLevelsForModel(model).length > 0;
 }

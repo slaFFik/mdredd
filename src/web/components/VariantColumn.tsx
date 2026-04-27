@@ -2,8 +2,8 @@ import { Fragment, useState, type JSX } from 'react';
 import type { ColumnConfig } from '@shared/schemas/session.js';
 import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
 import {
-  EFFORT_LEVELS,
   defaultEffortForModel,
+  effortLevelsForModel,
   modelSupportsEffort,
   type Effort,
 } from '@shared/constants.js';
@@ -162,7 +162,7 @@ export function VariantColumn(props: {
               }}
             >
               <option value="">Default</option>
-              {EFFORT_LEVELS.map((x) => (
+              {effortLevelsForModel(column.model).map((x) => (
                 <option key={x} value={x}>
                   {EFFORT_LABELS[x]}
                 </option>

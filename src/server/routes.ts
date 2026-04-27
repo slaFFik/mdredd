@@ -16,7 +16,7 @@ import { HEARTBEAT_INTERVAL_MS } from '@shared/constants.js';
 import { MAX_COLUMNS, makeBlankColumn, type ColumnConfig } from '@shared/schemas/session.js';
 import { EffortSchema, ModeSchema, type ColumnStatus } from '@shared/schemas/types.js';
 import { VariantTypeSchema } from '@shared/schemas/types.js';
-import { modelSupportsEffort } from '@shared/constants.js';
+import { defaultEffortForModel, effortLevelsForModel } from '@shared/constants.js';
 import type { ServerSseEvent } from '@shared/schemas/events.js';
 import { listLocalAgents, listLocalSkills } from './localVariants.js';
 import { FsBrowserError, listDir, readFileCapped } from './fsBrowser.js';
@@ -134,10 +134,16 @@ export function createRouter(deps: RouteDeps) {
           if (body.effort !== undefined) {
             col.effort = body.effort === null ? null : EffortSchema.parse(body.effort);
           }
-          // If the (possibly just-updated) model doesn't support effort, force
-          // it null. Belt-and-suspenders against a client that forgets to
-          // clear effort when switching to haiku.
-          if (!modelSupportsEffort(col.model)) col.effort = null;
+          // Normalize effort against the (possibly just-updated) model. Belt
+          // and suspenders against a client that forgets to clear effort when
+          // switching to a model that doesn't support the current value
+          // (e.g. opus→sonnet leaves `xhigh` orphaned, since sonnet rejects it).
+          const allowed = effortLevelsForModel(col.model);
+          if (allowed.length === 0) {
+            col.effort = null;
+          } else if (col.effort && !allowed.includes(col.effort)) {
+            col.effort = defaultEffortForModel(col.model);
+          }
         });
         return json(res, 200, { ok: true });
       }
