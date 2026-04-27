@@ -32,11 +32,28 @@ export const JUDGE_MODEL = 'claude-haiku-4-5';
 // historical comparison the way judge scores do.
 export const SLUG_MODEL = 'claude-haiku-4-5';
 
+// Stream-time per-tool truncation. Applied in `claudeStream.ts` when the
+// transcript event is built, so these caps bound what ever reaches disk and
+// the judge. Larger values mean richer tool detail at the cost of bigger
+// stream.jsonl / transcript.json files.
+export const STREAM_TOOL_ARGS_CAP_CHARS = 1024;
+export const STREAM_TOOL_RESULT_CAP_CHARS = 1024;
+
 // Judge input budgets (plan § Judge flow step 2).
 export const JUDGE_PROMPT_CAP_BYTES = 4 * 1024;
 export const JUDGE_VARIANT_CAP_BYTES = 8 * 1024;
 export const JUDGE_FINAL_MESSAGE_CAP_BYTES = 4 * 1024;
-export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 200;
+// Per-tool re-cap at judge time. ≥ stream caps is a no-op for individual
+// values; the retry shrink (× 0.5) brings it below to fit the smaller budget.
+export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 1024;
+// Aggregate cap on the joined tool-summary section. Drops the oldest tool
+// calls first when over budget so the most recent (closest to the final
+// message) survive, since those are most informative for scoring.
+export const JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES = 32 * 1024;
+// Write-mode output file content caps. Per-file uses mid-ellipsis to keep
+// head + tail; aggregate drops later files entirely once over budget.
+export const JUDGE_OUTPUT_FILE_CAP_BYTES = 4 * 1024;
+export const JUDGE_OUTPUTS_TOTAL_CAP_BYTES = 16 * 1024;
 
 // Effort levels accepted by `claude --effort`. Used as the Zod enum universe;
 // each model exposes its own subset below.

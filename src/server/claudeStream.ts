@@ -2,6 +2,10 @@ import { EventEmitter } from 'node:events';
 import type { Readable } from 'node:stream';
 import { createInterface } from 'node:readline';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
+import {
+  STREAM_TOOL_ARGS_CAP_CHARS,
+  STREAM_TOOL_RESULT_CAP_CHARS,
+} from '@shared/constants.js';
 import { log } from './log.js';
 
 /**
@@ -181,7 +185,7 @@ export class ClaudeStreamParser extends EventEmitter {
       }
       case 'content_block_stop': {
         if (this.currentContentBlockKind === 'tool_use' && this.currentToolName) {
-          const argsSummary = truncate(this.currentToolInputBuffer, 160);
+          const argsSummary = truncate(this.currentToolInputBuffer, STREAM_TOOL_ARGS_CAP_CHARS);
           this.emitNormalized({
             t: 'toolUse',
             ...(this.currentToolUseId ? { id: this.currentToolUseId } : {}),
@@ -246,7 +250,7 @@ export class ClaudeStreamParser extends EventEmitter {
           const tool = (id && this.toolUseIdToName.get(id)) ?? this.currentToolName ?? 'unknown';
           if (id) this.toolUseIdToName.delete(id);
           const rawResult = obj.content;
-          const resultSummary = truncate(stringifyResult(rawResult), 200);
+          const resultSummary = truncate(stringifyResult(rawResult), STREAM_TOOL_RESULT_CAP_CHARS);
           this.emitNormalized({
             t: 'toolResult',
             ...(id ? { id } : {}),
