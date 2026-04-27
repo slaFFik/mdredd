@@ -2,10 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Readable } from 'node:stream';
 import { createInterface } from 'node:readline';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
-import {
-  STREAM_TOOL_ARGS_CAP_CHARS,
-  STREAM_TOOL_RESULT_CAP_CHARS,
-} from '@shared/constants.js';
+import { STREAM_TOOL_ARGS_CAP_CHARS, STREAM_TOOL_RESULT_CAP_CHARS } from '@shared/constants.js';
 import { log } from './log.js';
 
 /**

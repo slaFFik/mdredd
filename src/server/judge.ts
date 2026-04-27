@@ -384,7 +384,14 @@ export async function readOutputContents(
   let used = 0;
   for (const f of outputs) {
     if (used >= totalCap) {
-      out.push({ path: f.path, bytes: f.bytes, content: '', truncated: false, omitted: true, binary: false });
+      out.push({
+        path: f.path,
+        bytes: f.bytes,
+        content: '',
+        truncated: false,
+        omitted: true,
+        binary: false,
+      });
       continue;
     }
     let raw: Buffer;
@@ -463,7 +470,8 @@ function formatOutputsSection(
     // no-op when content already fits.
     const remaining = Math.max(0, totalCap - used);
     const effective = Math.min(perFileCap, remaining);
-    const trimmed = effective > 0 ? midEllipsis(c.content, effective) : '[omitted: section budget reached]';
+    const trimmed =
+      effective > 0 ? midEllipsis(c.content, effective) : '[omitted: section budget reached]';
     const noteParts: string[] = [];
     if (c.truncated || trimmed !== c.content) noteParts.push('truncated');
     const note = noteParts.length > 0 ? ` [${noteParts.join(', ')}]` : '';
