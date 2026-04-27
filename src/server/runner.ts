@@ -14,6 +14,7 @@ import {
   DEFAULT_WALLCLOCK_CAP_MS,
   READ_ONLY_TOOLS,
   WRITE_TOOLS,
+  effortLevelsForModel,
   type Effort,
 } from '@shared/constants.js';
 import type { Mode } from '@shared/schemas/types.js';
@@ -423,8 +424,18 @@ export class Runner extends EventEmitter {
       'project',
       '--disable-slash-commands',
     ];
-    if (this.input.effort) {
+    // Last line of defence: only emit --effort if the value is valid for the
+    // model. The route layer already normalizes on PATCH, but Runner can be
+    // constructed directly (tests, future code paths), so the invariant
+    // "haiku never gets --effort, sonnet never gets xhigh" lives here too.
+    if (this.input.effort && effortLevelsForModel(this.input.model).includes(this.input.effort)) {
       args.push('--effort', this.input.effort);
+    } else if (this.input.effort) {
+      log.warn('runner.effort-dropped', {
+        model: this.input.model,
+        effort: this.input.effort,
+        hint: 'effort value not supported by model; spawning without --effort',
+      });
     }
     return args;
   }

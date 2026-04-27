@@ -1011,4 +1011,72 @@ await scenario('effort flag: omitted when null (haiku case)', async () => {
   });
 });
 
+await scenario('effort flag: dropped when model rejects the value (haiku + xhigh)', async () => {
+  await withSandbox(
+    'effort-haiku-xhigh',
+    async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+      const dumpPath = join(runDir, 'argv.txt');
+      // Construct a malformed input: route normalization should have caught
+      // this, but Runner must defend itself when invoked directly.
+      initialConfig.effort = 'xhigh';
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'go',
+        model: 'haiku',
+        effort: 'xhigh',
+        mode: 'read-only',
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'happy',
+          FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+        },
+      });
+      await runner.start();
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+      if (argv.includes('--effort')) {
+        throw new Error(`expected no --effort for haiku, got: ${argv.join(' ')}`);
+      }
+    },
+  );
+});
+
+await scenario('effort flag: dropped when model rejects the value (sonnet + xhigh)', async () => {
+  await withSandbox(
+    'effort-sonnet-xhigh',
+    async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+      const dumpPath = join(runDir, 'argv.txt');
+      initialConfig.effort = 'xhigh';
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'go',
+        model: 'sonnet',
+        effort: 'xhigh', // xhigh is opus-only
+        mode: 'read-only',
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'happy',
+          FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+        },
+      });
+      await runner.start();
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+      if (argv.includes('--effort')) {
+        throw new Error(`expected no --effort for sonnet+xhigh, got: ${argv.join(' ')}`);
+      }
+    },
+  );
+});
+
 console.log('\nAll runner smoke scenarios passed.');
