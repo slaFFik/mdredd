@@ -14,6 +14,7 @@ import {
   DEFAULT_WALLCLOCK_CAP_MS,
   READ_ONLY_TOOLS,
   WRITE_TOOLS,
+  type Effort,
 } from '@shared/constants.js';
 import type { Mode } from '@shared/schemas/types.js';
 
@@ -24,6 +25,7 @@ export interface RunnerInput {
   outputsDir: string; // <run>/outputs — scanned after run
   prompt: string;
   model: string;
+  effort?: Effort | null; // null/undefined → omit --effort
   mode: Mode;
   allowedTools?: string[]; // defaults based on mode
   caps?: { turns?: number; wallClockMs?: number };
@@ -421,6 +423,9 @@ export class Runner extends EventEmitter {
       'project',
       '--disable-slash-commands',
     ];
+    if (this.input.effort) {
+      args.push('--effort', this.input.effort);
+    }
     return args;
   }
 

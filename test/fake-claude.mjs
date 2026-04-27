@@ -41,6 +41,7 @@ if (args.includes('--help') || args[0] === '-h') {
       '  --strict-mcp-config',
       '  --setting-sources <sources>',
       '  --model <model>',
+      '  --effort <level>',
       '  --disable-slash-commands',
       '  --json-schema <schema>',
       '  --verbose',
@@ -53,6 +54,14 @@ function findFlagValue(name) {
   const i = args.indexOf(name);
   if (i >= 0 && i + 1 < args.length) return args[i + 1];
   return null;
+}
+
+// Optional argv dump for tests that want to assert on the spawn flags.
+// Writes the full argv (one arg per line) to the path in FAKE_CLAUDE_DUMP_ARGS,
+// then continues normally.
+if (env.FAKE_CLAUDE_DUMP_ARGS) {
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(env.FAKE_CLAUDE_DUMP_ARGS, args.join('\n'));
 }
 
 const jsonSchemaRaw = findFlagValue('--json-schema');

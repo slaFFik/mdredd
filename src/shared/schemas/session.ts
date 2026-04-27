@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ModeSchema, ModelIdSchema, VariantTypeSchema } from './types.js';
+import { EffortSchema, ModeSchema, ModelIdSchema, VariantTypeSchema } from './types.js';
+import { defaultEffortForModel } from '../constants.js';
 
 export const ColumnConfigSchema = z.object({
   id: z.string(),
@@ -9,6 +10,9 @@ export const ColumnConfigSchema = z.object({
   variantContent: z.string(),
   prompt: z.string(),
   model: ModelIdSchema,
+  // Null means "omit --effort and let the CLI decide". Optional+default keeps
+  // pre-existing session.json files (without this field) parsing cleanly.
+  effort: EffortSchema.nullable().optional().default(null),
   currentRunFolder: z.string().nullable(),
 });
 export type ColumnConfig = z.infer<typeof ColumnConfigSchema>;
@@ -44,6 +48,7 @@ export function makeBlankColumn(id: string, model: string): ColumnConfig {
     variantContent: '',
     prompt: '',
     model,
+    effort: defaultEffortForModel(model),
     currentRunFolder: null,
   };
 }

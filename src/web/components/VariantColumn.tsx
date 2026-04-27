@@ -1,6 +1,12 @@
 import { Fragment, useState, type JSX } from 'react';
 import type { ColumnConfig } from '@shared/schemas/session.js';
 import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
+import {
+  EFFORT_LEVELS,
+  defaultEffortForModel,
+  modelSupportsEffort,
+  type Effort,
+} from '@shared/constants.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { LocalVariant, LocalVariantsResponse } from '@shared/schemas/localVariants.js';
@@ -25,6 +31,14 @@ const MODELS = [
   { id: 'opus', label: 'Opus' },
   { id: 'haiku', label: 'Haiku' },
 ];
+
+const EFFORT_LABELS: Record<Effort, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+};
 
 const VARIANT_TYPES = [
   { id: 'CLAUDE.md', label: 'CLAUDE.md' },
@@ -120,7 +134,13 @@ export function VariantColumn(props: {
           <select
             value={column.model}
             disabled={isLocked}
-            onChange={(e) => void props.onPatchColumn(column.id, { model: e.target.value })}
+            onChange={(e) => {
+              const nextModel = e.target.value;
+              void props.onPatchColumn(column.id, {
+                model: nextModel,
+                effort: defaultEffortForModel(nextModel),
+              });
+            }}
           >
             {MODELS.map((m) => (
               <option key={m.id} value={m.id}>
@@ -129,6 +149,27 @@ export function VariantColumn(props: {
             ))}
           </select>
         </Hint>
+        {modelSupportsEffort(column.model) && (
+          <Hint content="Reasoning effort for the variant run">
+            <select
+              value={column.effort ?? ''}
+              disabled={isLocked}
+              onChange={(e) => {
+                const v = e.target.value;
+                void props.onPatchColumn(column.id, {
+                  effort: v === '' ? null : (v as Effort),
+                });
+              }}
+            >
+              <option value="">Default</option>
+              {EFFORT_LEVELS.map((x) => (
+                <option key={x} value={x}>
+                  {EFFORT_LABELS[x]}
+                </option>
+              ))}
+            </select>
+          </Hint>
+        )}
         <div className="meta-row">
           <Hint content="Variant type — CLAUDE.md, a skill (.claude/skills/), or an agent (.claude/agents/)">
             <select

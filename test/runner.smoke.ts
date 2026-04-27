@@ -70,6 +70,7 @@ async function withSandbox(
     promptSha256: '',
     prompt: 'test prompt',
     model: 'haiku',
+    effort: null,
     mode: 'read-only',
     status: 'preparing',
     startedAt: new Date().toISOString(),
@@ -344,6 +345,7 @@ await scenario('parallel runs: stats are isolated per run', async () => {
           promptSha256: '',
           prompt: 'test',
           model: 'haiku',
+          effort: null,
           mode: 'read-only',
           status: 'preparing',
           startedAt: new Date().toISOString(),
@@ -711,6 +713,7 @@ await scenario(
         promptSha256: '',
         prompt: 'p',
         model: 'haiku',
+        effort: null,
         mode: 'read-only',
         status: 'streaming',
         startedAt: new Date().toISOString(),
@@ -808,6 +811,7 @@ await scenario(
           promptSha256: '',
           prompt: 'p',
           model: 'haiku',
+          effort: null,
           mode: 'read-only',
           status,
           startedAt: new Date().toISOString(),
@@ -906,6 +910,7 @@ await scenario(
         promptSha256: '',
         prompt: 'p',
         model: 'haiku',
+        effort: null,
         mode: 'read-only',
         status: 'streaming',
         startedAt: new Date().toISOString(),
@@ -944,5 +949,66 @@ await scenario(
     }
   },
 );
+
+await scenario('effort flag: passed to claude argv when set', async () => {
+  await withSandbox('effort-set', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const dumpPath = join(runDir, 'argv.txt');
+    initialConfig.effort = 'xhigh';
+    const runner = new Runner({
+      claudeBin: fakeBin,
+      projectDir,
+      runDir,
+      outputsDir,
+      prompt: 'go',
+      model: 'opus',
+      effort: 'xhigh',
+      mode: 'read-only',
+      initialConfig,
+      env: {
+        ...process.env,
+        FAKE_CLAUDE_SCENARIO: 'happy',
+        FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+      },
+    });
+    await runner.start();
+    const final = await runner.wait();
+    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+    const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+    const idx = argv.indexOf('--effort');
+    if (idx < 0) throw new Error(`expected --effort in argv, got: ${argv.join(' ')}`);
+    if (argv[idx + 1] !== 'xhigh') {
+      throw new Error(`expected --effort xhigh, got --effort ${argv[idx + 1]}`);
+    }
+  });
+});
+
+await scenario('effort flag: omitted when null (haiku case)', async () => {
+  await withSandbox('effort-null', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+    const dumpPath = join(runDir, 'argv.txt');
+    const runner = new Runner({
+      claudeBin: fakeBin,
+      projectDir,
+      runDir,
+      outputsDir,
+      prompt: 'go',
+      model: 'haiku',
+      effort: null,
+      mode: 'read-only',
+      initialConfig,
+      env: {
+        ...process.env,
+        FAKE_CLAUDE_SCENARIO: 'happy',
+        FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+      },
+    });
+    await runner.start();
+    const final = await runner.wait();
+    if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+    const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+    if (argv.includes('--effort')) {
+      throw new Error(`expected no --effort in argv, got: ${argv.join(' ')}`);
+    }
+  });
+});
 
 console.log('\nAll runner smoke scenarios passed.');

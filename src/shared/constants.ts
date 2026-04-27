@@ -37,3 +37,20 @@ export const JUDGE_PROMPT_CAP_BYTES = 4 * 1024;
 export const JUDGE_VARIANT_CAP_BYTES = 8 * 1024;
 export const JUDGE_FINAL_MESSAGE_CAP_BYTES = 4 * 1024;
 export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 200;
+
+// Effort levels accepted by `claude --effort`. Order matches the CLI help.
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORT_LEVELS)[number];
+
+// Default effort to pre-select when a model is chosen. Haiku does not support
+// effort, so it returns null and the spawn omits --effort entirely.
+export function defaultEffortForModel(model: string): Effort | null {
+  if (model === 'opus') return 'xhigh';
+  if (model === 'sonnet') return 'high';
+  if (model === 'haiku') return null;
+  return null;
+}
+
+export function modelSupportsEffort(model: string): boolean {
+  return model !== 'haiku';
+}

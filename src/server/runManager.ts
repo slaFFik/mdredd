@@ -316,6 +316,7 @@ export class RunManager extends EventEmitter {
       promptSha256: sha256(col.prompt),
       prompt: col.prompt,
       model: col.model,
+      effort: col.effort ?? null,
       mode: sessionSnap.mode,
       status: 'preparing',
       startedAt: new Date().toISOString(),
@@ -337,6 +338,7 @@ export class RunManager extends EventEmitter {
       outputsDir: sandbox.outputsDir,
       prompt: col.prompt,
       model: col.model,
+      effort: col.effort ?? null,
       mode: sessionSnap.mode as Mode,
       initialConfig,
     });

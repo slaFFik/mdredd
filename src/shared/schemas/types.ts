@@ -1,7 +1,10 @@
 import { z } from 'zod';
+import { EFFORT_LEVELS } from '../constants.js';
 
 export const ModeSchema = z.enum(['read-only', 'write']);
 export type Mode = z.infer<typeof ModeSchema>;
+
+export const EffortSchema = z.enum(EFFORT_LEVELS);
 
 export const VariantTypeSchema = z.enum(['CLAUDE.md', 'skill', 'agent']);
 export type VariantType = z.infer<typeof VariantTypeSchema>;

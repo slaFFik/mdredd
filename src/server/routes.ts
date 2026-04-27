@@ -14,8 +14,9 @@ import {
 import { log } from './log.js';
 import { HEARTBEAT_INTERVAL_MS } from '@shared/constants.js';
 import { MAX_COLUMNS, makeBlankColumn, type ColumnConfig } from '@shared/schemas/session.js';
-import { ModeSchema, type ColumnStatus } from '@shared/schemas/types.js';
+import { EffortSchema, ModeSchema, type ColumnStatus } from '@shared/schemas/types.js';
 import { VariantTypeSchema } from '@shared/schemas/types.js';
+import { modelSupportsEffort } from '@shared/constants.js';
 import type { ServerSseEvent } from '@shared/schemas/events.js';
 import { listLocalAgents, listLocalSkills } from './localVariants.js';
 import { FsBrowserError, listDir, readFileCapped } from './fsBrowser.js';
@@ -130,6 +131,13 @@ export function createRouter(deps: RouteDeps) {
           if (body.variantContent !== undefined) col.variantContent = String(body.variantContent);
           if (body.prompt !== undefined) col.prompt = String(body.prompt);
           if (body.model !== undefined) col.model = String(body.model);
+          if (body.effort !== undefined) {
+            col.effort = body.effort === null ? null : EffortSchema.parse(body.effort);
+          }
+          // If the (possibly just-updated) model doesn't support effort, force
+          // it null. Belt-and-suspenders against a client that forgets to
+          // clear effort when switching to haiku.
+          if (!modelSupportsEffort(col.model)) col.effort = null;
         });
         return json(res, 200, { ok: true });
       }
