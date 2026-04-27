@@ -147,16 +147,14 @@ export function VariantColumn(props: {
         {effortLevelsForModel(column.model).length > 0 && (
           <Hint content="Reasoning effort for the variant run">
             <select
-              value={column.effort ?? ''}
+              value={column.effort ?? (defaultEffortForModel(column.model) as Effort)}
               disabled={isLocked}
               onChange={(e) => {
-                const v = e.target.value;
                 void props.onPatchColumn(column.id, {
-                  effort: v === '' ? null : (v as Effort),
+                  effort: e.target.value as Effort,
                 });
               }}
             >
-              <option value="">Default</option>
               {effortLevelsForModel(column.model).map((x) => (
                 <option key={x} value={x}>
                   {EFFORT_LABELS[x]}

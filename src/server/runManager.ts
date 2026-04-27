@@ -13,6 +13,7 @@ import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { Mode, RunStatus } from '@shared/schemas/types.js';
 import type { ColumnConfig } from '@shared/schemas/session.js';
+import { defaultEffortForModel } from '@shared/constants.js';
 
 const SEQ_FILE = '.seq';
 const RING_BUFFER_LIMIT = 2_000;
@@ -316,7 +317,10 @@ export class RunManager extends EventEmitter {
       promptSha256: sha256(col.prompt),
       prompt: col.prompt,
       model: col.model,
-      effort: col.effort ?? null,
+      // Fall back to the model's default effort for legacy session.json files
+      // (written before this field existed) so a Run never goes out without
+      // an effort the UI showed as selected.
+      effort: col.effort ?? defaultEffortForModel(col.model),
       mode: sessionSnap.mode,
       status: 'preparing',
       startedAt: new Date().toISOString(),
@@ -338,7 +342,7 @@ export class RunManager extends EventEmitter {
       outputsDir: sandbox.outputsDir,
       prompt: col.prompt,
       model: col.model,
-      effort: col.effort ?? null,
+      effort: col.effort ?? defaultEffortForModel(col.model),
       mode: sessionSnap.mode as Mode,
       initialConfig,
     });
