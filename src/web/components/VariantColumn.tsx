@@ -125,44 +125,46 @@ export function VariantColumn(props: {
           disabled={isLocked}
           onChange={(e) => void props.onPatchColumn(column.id, { variantName: e.target.value })}
         />
-        <Hint content="Model used for the variant run">
-          <select
-            value={column.model}
-            disabled={isLocked}
-            onChange={(e) => {
-              const nextModel = e.target.value;
-              void props.onPatchColumn(column.id, {
-                model: nextModel,
-                effort: defaultEffortForModel(nextModel),
-              });
-            }}
-          >
-            {MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </Hint>
-        {effortLevelsForModel(column.model).length > 0 && (
-          <Hint content="Reasoning effort for the variant run">
+        <div className="model-effort">
+          <Hint content="Model used for the variant run">
             <select
-              value={column.effort ?? (defaultEffortForModel(column.model) as Effort)}
+              value={column.model}
               disabled={isLocked}
               onChange={(e) => {
+                const nextModel = e.target.value;
                 void props.onPatchColumn(column.id, {
-                  effort: e.target.value as Effort,
+                  model: nextModel,
+                  effort: defaultEffortForModel(nextModel),
                 });
               }}
             >
-              {effortLevelsForModel(column.model).map((x) => (
-                <option key={x} value={x}>
-                  {EFFORT_LABELS[x]}
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
                 </option>
               ))}
             </select>
           </Hint>
-        )}
+          {effortLevelsForModel(column.model).length > 0 && (
+            <Hint content="Reasoning effort for the variant run">
+              <select
+                value={column.effort ?? (defaultEffortForModel(column.model) as Effort)}
+                disabled={isLocked}
+                onChange={(e) => {
+                  void props.onPatchColumn(column.id, {
+                    effort: e.target.value as Effort,
+                  });
+                }}
+              >
+                {effortLevelsForModel(column.model).map((x) => (
+                  <option key={x} value={x}>
+                    {EFFORT_LABELS[x]}
+                  </option>
+                ))}
+              </select>
+            </Hint>
+          )}
+        </div>
         <div className="meta-row">
           <Hint content="Variant type — CLAUDE.md, a skill (.claude/skills/), or an agent (.claude/agents/)">
             <select

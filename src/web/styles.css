@@ -189,9 +189,17 @@ body {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display: grid;
-  grid-template-columns: 1fr 120px;
+  grid-template-columns: 1fr auto;
   gap: 6px 10px;
   align-items: center;
+}
+.column-header .model-effort {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.column-header .model-effort select {
+  min-width: 90px;
 }
 .column-header input,
 .column-header select {
