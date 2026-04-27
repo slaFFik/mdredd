@@ -52,12 +52,7 @@ export const OPUS_EFFORTS = [
   'xhigh',
   'max',
 ] as const satisfies readonly Effort[];
-export const SONNET_EFFORTS = [
-  'low',
-  'medium',
-  'high',
-  'max',
-] as const satisfies readonly Effort[];
+export const SONNET_EFFORTS = ['low', 'medium', 'high', 'max'] as const satisfies readonly Effort[];
 export const HAIKU_EFFORTS = [] as const satisfies readonly Effort[];
 
 // Default effort pre-selected when each model is chosen. Haiku is null →

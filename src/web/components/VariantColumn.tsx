@@ -1,11 +1,7 @@
 import { Fragment, useState, type JSX } from 'react';
 import type { ColumnConfig } from '@shared/schemas/session.js';
 import type { ColumnStatus, Mode } from '@shared/schemas/types.js';
-import {
-  defaultEffortForModel,
-  effortLevelsForModel,
-  type Effort,
-} from '@shared/constants.js';
+import { defaultEffortForModel, effortLevelsForModel, type Effort } from '@shared/constants.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { LocalVariant, LocalVariantsResponse } from '@shared/schemas/localVariants.js';
