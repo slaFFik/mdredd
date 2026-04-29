@@ -1499,5 +1499,46 @@ scenario('H2: binary path uses byte length, not char length', async () => {
   }
 });
 
+// --- H4: extractJsonCandidates loops over all balanced objects ----------
+
+scenario(
+  'H4: response with draft object before real object → parse succeeds on the real one',
+  async () => {
+    await withTmpRunDir(async (runDir) => {
+      // The model emits a small "draft" object first, then the real answer.
+      // Previously, the brace scanner stopped at the first balanced object;
+      // when that draft fails Zod, no further candidate was tried.
+      const realAnswer = {
+        scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+        scoreRationales: {
+          accuracy: '75 not 100 because some claims unverified.',
+          completeness: '75 not 100 because one minor gap.',
+          adherence: '75 not 100 because optional step skipped.',
+          clarity: '75 not 100 because one paragraph rambles.',
+        },
+        rationale: 'overall solid; small gaps across the rubric kept it from a perfect score.',
+      };
+      // The envelope's `result` field carries prose-with-multiple-objects that
+      // forces the parser through extractAndValidate (the wrapper passes the
+      // string through). The first balanced object is a useless draft; the
+      // second is the real schema-conformant answer.
+      const envelope = JSON.stringify({
+        result: `Here's my draft: {"draft": true}\n\nActual scorecard:\n${JSON.stringify(realAnswer)}`,
+        structured_output: null,
+      });
+      const spawnFn: SpawnJudgeFn = async () => envelope;
+      const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+      if (result.status !== 'ok') {
+        throw new Error(
+          `expected status=ok (real object should parse), got ${result.status}: ${result.error ?? ''}`,
+        );
+      }
+      if (result.scores?.accuracy !== 75) {
+        throw new Error(`expected accuracy=75 from real object, got ${result.scores?.accuracy}`);
+      }
+    });
+  },
+);
+
 await runAllScenarios();
 console.log('\nAll judge scenarios passed.');

@@ -983,16 +983,27 @@ function extractJsonCandidates(body: string): string[] {
   const trimmed = body.trim();
   if (trimmed) out.push(trimmed);
 
-  // Strip markdown code fences like ```json ... ``` or ``` ... ```.
-  const fenceMatch = /```(?:json|JSON)?\s*([\s\S]*?)\s*```/.exec(body);
-  if (fenceMatch && fenceMatch[1]) out.push(fenceMatch[1].trim());
+  // Strip markdown code fences like ```json ... ``` or ``` ... ```. Loop so a
+  // response with multiple fenced blocks (e.g. an example block followed by the
+  // real answer) yields all candidates, not just the first.
+  const fenceRe = /```(?:json|JSON)?\s*([\s\S]*?)\s*```/g;
+  for (const match of body.matchAll(fenceRe)) {
+    if (match[1]) out.push(match[1].trim());
+  }
 
-  // First balanced object in the body, ignoring braces inside strings.
-  const braceStart = body.indexOf('{');
-  if (braceStart >= 0) {
+  // All balanced objects in the body, ignoring braces inside strings. The
+  // model may emit explanatory prose with an incidental object (e.g.
+  // `Here's a draft: {"draft": true}... actual: {"scores": ...}`). Yielding
+  // every balanced object lets the validator try each one and stop at the
+  // first that parses + matches the schema (issue H4).
+  let pos = 0;
+  while (true) {
+    const braceStart = body.indexOf('{', pos);
+    if (braceStart < 0) break;
     let depth = 0;
     let inString = false;
     let escape = false;
+    let endIdx = -1;
     for (let i = braceStart; i < body.length; i++) {
       const ch = body.charAt(i);
       if (escape) {
@@ -1012,11 +1023,14 @@ function extractJsonCandidates(body: string): string[] {
       else if (ch === '}') {
         depth--;
         if (depth === 0) {
-          out.push(body.slice(braceStart, i + 1));
+          endIdx = i;
           break;
         }
       }
     }
+    if (endIdx < 0) break;
+    out.push(body.slice(braceStart, endIdx + 1));
+    pos = endIdx + 1;
   }
 
   return out;
