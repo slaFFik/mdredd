@@ -6,6 +6,7 @@ import {
   buildJudgePrompt,
   extractFinalAssistantMessage,
   extractToolSummary,
+  midEllipsis,
   readOutputContents,
   runJudge,
   type OutputFileContent,
@@ -1381,6 +1382,121 @@ scenario('C3: timeout-retry on Haiku does not pass --effort (no effort menu)', a
       );
     }
   });
+});
+
+// --- H2: midEllipsis byte budget + outputs section accounting -----------
+
+scenario('H2: midEllipsis with cap=10 returns ≤10 bytes (smaller than marker)', () => {
+  const big = 'A'.repeat(1000);
+  const out = midEllipsis(big, 10);
+  const bytes = Buffer.byteLength(out, 'utf8');
+  if (bytes > 10) {
+    throw new Error(`midEllipsis(cap=10) returned ${bytes} bytes; expected ≤10`);
+  }
+});
+
+scenario('H2: midEllipsis with cap=20 (cap < marker bytes) returns ≤cap', () => {
+  const big = 'B'.repeat(1000);
+  const out = midEllipsis(big, 20);
+  const bytes = Buffer.byteLength(out, 'utf8');
+  if (bytes > 20) {
+    throw new Error(`midEllipsis(cap=20) returned ${bytes} bytes; expected ≤20`);
+  }
+});
+
+scenario('H2: midEllipsis with cap larger than marker keeps head + tail', () => {
+  const big = 'C'.repeat(2000);
+  const out = midEllipsis(big, 200);
+  const bytes = Buffer.byteLength(out, 'utf8');
+  if (bytes > 200) {
+    throw new Error(`midEllipsis(cap=200) returned ${bytes} bytes; expected ≤200`);
+  }
+  if (!out.includes('truncated')) {
+    throw new Error(
+      `midEllipsis output should contain truncation marker; got: ${out.slice(0, 80)}`,
+    );
+  }
+  if (!out.startsWith('C')) {
+    throw new Error('expected output to start with head (C...)');
+  }
+  if (!out.endsWith('C')) {
+    throw new Error('expected output to end with tail (...C)');
+  }
+});
+
+scenario('H2: midEllipsis no-op when content already fits', () => {
+  const small = 'small';
+  if (midEllipsis(small, 1000) !== small) {
+    throw new Error('midEllipsis should be a no-op when content fits in cap');
+  }
+});
+
+scenario('H2: outputs section stays within total cap including headers + notes', () => {
+  // Five 4 KiB files = 20 KiB raw. Total cap is 16 KiB. With header + note
+  // overhead correctly accounted, the rendered section must not exceed the
+  // cap by more than a small constant for the outermost block separators.
+  const big = 'D'.repeat(4 * 1024);
+  const files: OutputFile[] = [
+    { path: 'a.txt', bytes: big.length },
+    { path: 'b.txt', bytes: big.length },
+    { path: 'c.txt', bytes: big.length },
+    { path: 'd.txt', bytes: big.length },
+    { path: 'e.txt', bytes: big.length },
+  ];
+  const outputContents: OutputFileContent[] = files.map((f) => ({
+    path: f.path,
+    bytes: f.bytes,
+    content: big,
+    truncated: false,
+    omitted: false,
+    binary: false,
+  }));
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: files,
+    outputContents,
+  });
+  // Find the files section start/end.
+  const filesStart = prompt.indexOf('## Files the variant produced');
+  const filesEnd = prompt.indexOf('## Run metadata', filesStart);
+  if (filesStart < 0 || filesEnd < 0) throw new Error('files section markers not found');
+  const filesSectionBytes = Buffer.byteLength(prompt.slice(filesStart, filesEnd), 'utf8');
+  // Allow some slack for the section heading + fence markers + "(no files
+  // produced)" sentinel — header bytes are small. The total cap is
+  // JUDGE_OUTPUTS_TOTAL_CAP_BYTES = 16 KiB; with 5 files × 4 KiB we expect
+  // most blocks to land inside the cap, with the final 1-2 marked omitted.
+  // Acceptable upper bound: cap + 2 KiB scaffold (heading, fences, joins).
+  const cap = 16 * 1024;
+  if (filesSectionBytes > cap + 2 * 1024) {
+    throw new Error(
+      `files section ${filesSectionBytes} bytes exceeds cap+slack (${cap + 2 * 1024})`,
+    );
+  }
+});
+
+scenario('H2: binary path uses byte length, not char length', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mdredd-judge-h2-'));
+  try {
+    const outputsDir = join(dir, 'outputs');
+    mkdirSync(outputsDir, { recursive: true });
+    // A small binary file. The previous code used `header.length + c.content.length`
+    // (UTF-16 char units). For ASCII this matches byte length, but the path is
+    // wrong in principle — switch to bytes via Buffer.byteLength.
+    writeFileSync(join(outputsDir, 'b.bin'), Buffer.from([0x00, 0x01, 0x02]));
+    const result = await readOutputContents(
+      dir,
+      [{ path: 'b.bin', bytes: 3 }],
+      4 * 1024,
+      16 * 1024,
+    );
+    if (!result[0]!.binary) throw new Error('expected binary flag set');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await runAllScenarios();

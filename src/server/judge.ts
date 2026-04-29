@@ -559,18 +559,26 @@ function formatOutputsSection(
     const c = byPath.get(f.path);
     const header = `### ${f.path} (${f.bytes} bytes)`;
     if (!c || c.omitted) {
-      blocks.push(`${header}\n[omitted: section budget reached]`);
+      const block = `${header}\n[omitted: section budget reached]`;
+      blocks.push(block);
+      used += Buffer.byteLength(block, 'utf8');
       continue;
     }
     if (c.binary) {
-      blocks.push(`${header}\n${c.content}`);
-      used += header.length + c.content.length;
+      const block = `${header}\n${c.content}`;
+      blocks.push(block);
+      // Use UTF-8 byte length, not character length — non-ASCII content was
+      // previously undercounted, leaking past the aggregate cap.
+      used += Buffer.byteLength(block, 'utf8');
       continue;
     }
-    // Re-apply the (possibly retry-shrunk) per-file cap. midEllipsis is a
-    // no-op when content already fits.
+    // Compute header + tentative note overhead in BYTES first, then allocate
+    // the leftover budget to content. Otherwise the block ends up larger than
+    // the remaining budget by the size of the header + newlines + note.
+    const tentativeNote = c.truncated ? ' [truncated]' : '';
+    const overhead = Buffer.byteLength(`${header}${tentativeNote}\n`, 'utf8');
     const remaining = Math.max(0, totalCap - used);
-    const effective = Math.min(perFileCap, remaining);
+    const effective = Math.max(0, Math.min(perFileCap, remaining - overhead));
     const trimmed =
       effective > 0 ? midEllipsis(c.content, effective) : '[omitted: section budget reached]';
     const noteParts: string[] = [];
@@ -579,21 +587,25 @@ function formatOutputsSection(
     const block = `${header}${note}\n${trimmed}`;
     blocks.push(block);
     used += Buffer.byteLength(block, 'utf8');
-    if (used >= totalCap) {
-      // Mark any remaining files as omitted in subsequent iterations.
-      // (Loop continues only to emit the omission markers.)
-    }
   }
   return blocks.join('\n\n');
 }
 
-function midEllipsis(s: string, cap: number): string {
+export function midEllipsis(s: string, cap: number): string {
   const buf = Buffer.from(s, 'utf8');
   if (buf.byteLength <= cap) return s;
-  const half = Math.floor(cap / 2) - 10;
+  const marker = `\n…[truncated ${buf.byteLength - cap} bytes]…\n`;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  // Cap is too small to fit the marker plus any head/tail content. Emit just
+  // the marker (truncated to the cap if even that doesn't fit) — this guarantees
+  // the byte budget is respected, which the caller relies on for aggregate caps.
+  if (cap <= markerBytes) {
+    return Buffer.from(marker, 'utf8').subarray(0, cap).toString('utf8');
+  }
+  const half = Math.floor((cap - markerBytes) / 2);
   const head = buf.subarray(0, half).toString('utf8');
   const tail = buf.subarray(buf.byteLength - half).toString('utf8');
-  return `${head}\n…[truncated ${buf.byteLength - cap} bytes]…\n${tail}`;
+  return `${head}${marker}${tail}`;
 }
 
 function truncate(s: string, cap: number): string {
