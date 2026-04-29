@@ -52,6 +52,7 @@ export function VariantColumn(props: {
     config: RunConfig;
     transcript: TranscriptFile | null;
     judge: JudgeFile | null;
+    judgesByModel: Record<string, JudgeFile>;
     outputs: OutputFile[];
   } | null;
   isJudging: boolean;
@@ -308,7 +309,7 @@ export function VariantColumn(props: {
 
       {!isStreaming &&
         (runBundle?.judge ? (
-          <JudgeCard judge={runBundle.judge} />
+          <JudgeCard judge={runBundle.judge} judgesByModel={runBundle.judgesByModel} />
         ) : isJudging ? (
           <JudgeCard judging />
         ) : null)}

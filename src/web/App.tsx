@@ -47,6 +47,7 @@ export interface AppState {
       config: RunConfig;
       transcript: TranscriptFile | null;
       judge: JudgeFile | null;
+      judgesByModel: Record<string, JudgeFile>;
       outputs: OutputFile[];
     }
   >;
