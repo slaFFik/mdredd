@@ -96,7 +96,7 @@ export function JudgeCard(
           />
         </tbody>
       </table>
-      {j.rationale && <div className="rationale">{j.rationale}</div>}
+      {j.rationale && <div className="rationale">{renderRationale(j.rationale)}</div>}
     </div>
   );
 }
