@@ -333,10 +333,15 @@ export function buildJudgePrompt(
 }
 
 function sanitizeLabel(s: string): string {
-  // Labels live on the same line as the open marker. Strip newlines and cap
+  // Labels live on the same line as the open marker. Strip newlines, sequences
+  // of `>>>` / `<<<` (which the fence uses to delimit untrusted data), and cap
   // length so untrusted-derived labels (e.g. variantType + skillOrAgentName)
-  // can't break out of that line.
-  return s.replace(/[\r\n]/g, ' ').slice(0, 100);
+  // can't break out of the line OR forge a fence boundary.
+  return s
+    .replace(/[\r\n]/g, ' ')
+    .replace(/>{3,}/g, '')
+    .replace(/<{3,}/g, '')
+    .slice(0, 100);
 }
 
 function detectCanaryLeak(raw: string, canary: string): boolean {
