@@ -275,7 +275,22 @@ function buildActiveStatusMap(
   return m;
 }
 
+// Common security headers applied to every response. With the per-launch
+// session token gone, embedding the SPA in a hostile iframe and driving
+// mutating UI via clickjacking is the residual concern; `X-Frame-Options:
+// DENY` plus the matching `Content-Security-Policy: frame-ancestors 'none'`
+// (the modern equivalent — older browsers honor only the former, newer ones
+// prefer the latter) close that gap. `Referrer-Policy: no-referrer` keeps the
+// SPA from leaking its URL to outbound fetches; not strictly required for a
+// localhost tool but free defense-in-depth.
+function setSecurityHeaders(res: ServerResponse): void {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  res.setHeader('Referrer-Policy', 'no-referrer');
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
+  setSecurityHeaders(res);
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
@@ -305,6 +320,7 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
 
 function handleSse(_req: IncomingMessage, res: ServerResponse, deps: RouteDeps): void {
   const lastId = Number(_req.headers['last-event-id'] ?? 0);
+  setSecurityHeaders(res);
   res.statusCode = 200;
   res.setHeader('content-type', 'text/event-stream');
   res.setHeader('cache-control', 'no-cache');
@@ -355,6 +371,7 @@ async function serveStatic(urlPath: string, res: ServerResponse, deps: RouteDeps
     const data = await readFile(safe);
     const ext = extname(safe).toLowerCase();
     const type = MIME_TYPES[ext] ?? 'application/octet-stream';
+    setSecurityHeaders(res);
     res.statusCode = 200;
     res.setHeader('content-type', type);
     res.setHeader('cache-control', 'no-cache');
@@ -369,10 +386,12 @@ async function fallbackHtml(res: ServerResponse, deps: RouteDeps): Promise<void>
   const index = join(deps.webRoot, 'index.html');
   try {
     const html = await readFile(index, 'utf8');
+    setSecurityHeaders(res);
     res.statusCode = 200;
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(html);
   } catch {
+    setSecurityHeaders(res);
     res.statusCode = 503;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
     res.end('mdredd web bundle is missing. Run `npm run build` (or `npm run dev:web` in dev).');

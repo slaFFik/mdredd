@@ -229,6 +229,33 @@ scenario('GET /sse with bad Host → 403 bad host', async () => {
 
 // --- static / unauthenticated paths ----------------------------------------
 
+// --- security headers (clickjacking defense) -------------------------------
+
+scenario('every response carries X-Frame-Options + frame-ancestors CSP', async () => {
+  // After the auth-token removal there is no bearer secret to stop a hostile
+  // page from iframing http://127.0.0.1:6800/ and driving mutating UI via
+  // clickjacking. X-Frame-Options DENY (legacy) and frame-ancestors 'none'
+  // (modern equivalent) close that gap. Verify on a known-200 path.
+  const res = await callRouter(makeDeps(), 'GET', '/api/state', { host: VALID_HOST });
+  if (res.headers['X-Frame-Options'] !== 'DENY') {
+    throw new Error(`expected X-Frame-Options=DENY, got ${res.headers['X-Frame-Options']}`);
+  }
+  const csp = res.headers['Content-Security-Policy'];
+  if (csp !== "frame-ancestors 'none'") {
+    throw new Error(`expected frame-ancestors 'none' CSP, got ${csp}`);
+  }
+});
+
+scenario('403 responses also carry the security headers', async () => {
+  // The headers must apply on the rejection path too — otherwise an attacker
+  // probing for 403 leaks would get an embeddable response.
+  const res = await callRouter(makeDeps(), 'GET', '/api/state', { host: 'evil.com:6800' });
+  if (res.statusCode !== 403) throw new Error(`setup wrong: expected 403, got ${res.statusCode}`);
+  if (res.headers['X-Frame-Options'] !== 'DENY') {
+    throw new Error('403 response missing X-Frame-Options');
+  }
+});
+
 scenario('GET /health (unauthenticated) bypasses Host/Origin gate', async () => {
   // /health is intentionally unauthenticated so curl-based liveness probes
   // work without forging headers. Verify the gate isn't accidentally applied
