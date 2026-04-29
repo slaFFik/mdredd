@@ -583,7 +583,7 @@ function truncate(s: string, cap: number): string {
 
 type AttemptResult =
   | { ok: true; value: JudgeModelOutput }
-  | { ok: false; kind: 'parse'; error: string }
+  | { ok: false; kind: 'parse'; error: string; code: string }
   | { ok: false; kind: 'timeout'; error: string };
 
 async function attemptJudge(
@@ -614,7 +614,7 @@ async function attemptJudge(
   }
   const parsed = tryParseJudgeOutput(raw);
   if (parsed.ok) return { ok: true, value: parsed.value };
-  return { ok: false, kind: 'parse', error: parsed.error };
+  return { ok: false, kind: 'parse', error: parsed.error, code: parsed.code };
 }
 
 export async function invokeJudge(
@@ -659,10 +659,19 @@ export async function invokeJudge(
     retryPrompt = rebuilt.prompt;
     retryCanary = rebuilt.canary;
   } else {
-    log.warn('judge.first-attempt-invalid', { reason: 'parse', error: first.error });
+    log.warn('judge.first-attempt-invalid', {
+      reason: 'parse',
+      error: first.error,
+      code: first.code,
+    });
+    // Splice ONLY the stable code (e.g. E_SCHEMA_FAIL, E_JSON_PARSE) into the
+    // retry prompt. The free-form error message can echo Zod-rendered fragments
+    // of the first response, and the first response is untrusted — embedding it
+    // here would let a poisoned first response steer the retry, bypassing the
+    // <<<UNTRUSTED-DATA-{nonce}>>> fence (issue C2).
     retryPrompt =
       `${built.prompt}\n\n# Retry required\n` +
-      `Your previous response did not match the required shape. Parser said: "${first.error}"\n` +
+      `Your previous response did not match the required shape. Parser code: ${first.code}\n` +
       `Emit ONLY the JSON object described above — no markdown, no prose, no code fences. ` +
       `The first character MUST be "{" and the last MUST be "}". Include all four score keys (accuracy, completeness, adherence, clarity) and the rationale field.`;
     retryCanary = built.canary;
@@ -773,9 +782,13 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
   });
 }
 
-function tryParseJudgeOutput(
-  raw: string,
-): { ok: true; value: JudgeModelOutput } | { ok: false; error: string } {
+// Stable, content-free error codes spliced into retry prompts. The free-form
+// `error` string is for logs only; nothing derived from a (possibly-poisoned)
+// first response goes back into the model's retry context.
+type ParseError = { ok: false; error: string; code: string };
+type ParseResult = { ok: true; value: JudgeModelOutput } | ParseError;
+
+function tryParseJudgeOutput(raw: string): ParseResult {
   // The --output-format json wrapper returns a top-level envelope. When --json-schema
   // is set, the schema-conformant body lands under `structured_output` (already an
   // object) and `result` is typically empty. Older CLIs or non-schema retries put a
@@ -787,7 +800,7 @@ function tryParseJudgeOutput(
   } catch {
     const direct = extractAndValidate(raw);
     if (direct.ok) return direct;
-    return { ok: false, error: 'judge output was not valid JSON' };
+    return { ok: false, error: 'judge output was not valid JSON', code: 'E_JSON_PARSE' };
   }
 
   const outer = outerParsed as { result?: unknown; structured_output?: unknown };
@@ -815,18 +828,18 @@ function tryParseJudgeOutput(
         error:
           'structured_output present but did not match schema: ' +
           issues.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; '),
+        code: 'E_SCHEMA_FAIL_STRUCTURED',
       };
     }
   }
   return {
     ok: false,
     error: asEnvelope.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; '),
+    code: 'E_SCHEMA_FAIL_ENVELOPE',
   };
 }
 
-function extractAndValidate(
-  body: string,
-): { ok: true; value: JudgeModelOutput } | { ok: false; error: string } {
+function extractAndValidate(body: string): ParseResult {
   const candidates = extractJsonCandidates(body);
   let lastIssues: string | null = null;
   let anyParsed = false;
@@ -838,13 +851,18 @@ function extractAndValidate(
     if (validated.success) return { ok: true, value: normalizeUngradeable(validated.data) };
     lastIssues = validated.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; ');
   }
-  if (lastIssues) return { ok: false, error: lastIssues };
-  if (anyParsed) return { ok: false, error: 'judge output parsed but did not match schema' };
-  // Include a preview so the error itself is diagnostic even without the raw log.
-  const preview = body.trim().slice(0, 200).replace(/\s+/g, ' ');
+  if (lastIssues) return { ok: false, error: lastIssues, code: 'E_SCHEMA_FAIL' };
+  if (anyParsed) {
+    return {
+      ok: false,
+      error: 'judge output parsed but did not match schema',
+      code: 'E_SCHEMA_FAIL',
+    };
+  }
   return {
     ok: false,
-    error: `no parseable JSON object found. preview: ${preview || '(empty response)'}`,
+    error: 'no parseable JSON object found',
+    code: 'E_NO_JSON_OBJECT',
   };
 }
 
