@@ -113,18 +113,21 @@ export const ServerSseEventSchema = z.discriminatedUnion('t', [
   z.object({
     t: z.literal('judge.started'),
     col: z.string(),
+    runFolder: z.string(),
     seq: z.number().int().nonnegative(),
   }),
   z.object({
     t: z.literal('judge.updated'),
     col: z.string(),
-    // Payload validated separately against JudgeJsonSchema.
+    // Payload validated separately against JudgeJsonSchema. The payload's
+    // runFolder is the source of truth for which run this update belongs to.
     payload: z.unknown(),
     seq: z.number().int().nonnegative(),
   }),
   z.object({
     t: z.literal('judge.errored'),
     col: z.string(),
+    runFolder: z.string(),
     error: z.string(),
     seq: z.number().int().nonnegative(),
   }),

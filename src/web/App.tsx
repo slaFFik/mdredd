@@ -336,15 +336,25 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
         },
       };
     }
-    case 'judge.started':
+    case 'judge.started': {
+      // Only flip the column indicator if the column is still on the run
+      // this judge is for. A late event from a stale run leaves the
+      // current run's indicator alone.
+      const col = state.session?.columns.find((c) => c.id === event.col);
+      if (col?.currentRunFolder !== event.runFolder) return state;
       return {
         ...state,
         judgingByColumn: { ...state.judgingByColumn, [event.col]: true },
       };
+    }
     case 'judge.updated': {
       const payload = event.payload as JudgeFile;
       const existing = state.runs[payload.runFolder];
-      const judgingByColumn = { ...state.judgingByColumn, [event.col]: false };
+      const col = state.session?.columns.find((c) => c.id === event.col);
+      const isCurrentRun = col?.currentRunFolder === payload.runFolder;
+      const judgingByColumn = isCurrentRun
+        ? { ...state.judgingByColumn, [event.col]: false }
+        : state.judgingByColumn;
       if (!existing) return { ...state, judgingByColumn };
       return {
         ...state,
@@ -356,15 +366,15 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
       };
     }
     case 'judge.errored': {
-      const judgingByColumn = { ...state.judgingByColumn, [event.col]: false };
+      const existing = state.runs[event.runFolder];
       const col = state.session?.columns.find((c) => c.id === event.col);
-      const runFolder = col?.currentRunFolder ?? null;
-      if (!runFolder || !state.runs[runFolder]) {
-        return { ...state, judgingByColumn };
-      }
-      const existing = state.runs[runFolder];
+      const isCurrentRun = col?.currentRunFolder === event.runFolder;
+      const judgingByColumn = isCurrentRun
+        ? { ...state.judgingByColumn, [event.col]: false }
+        : state.judgingByColumn;
+      if (!existing) return { ...state, judgingByColumn };
       const synthetic: JudgeFile = {
-        runFolder,
+        runFolder: event.runFolder,
         createdAt: new Date().toISOString(),
         judgeModel: state.session?.judgeModel ?? JUDGE_MODEL,
         status: 'errored',
@@ -375,7 +385,7 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
         judgingByColumn,
         runs: {
           ...state.runs,
-          [runFolder]: { ...existing, judge: synthetic },
+          [event.runFolder]: { ...existing, judge: synthetic },
         },
       };
     }

@@ -450,13 +450,14 @@ export class RunManager extends EventEmitter {
   }
 
   private async fireJudge(columnId: string, cfg: RunConfig, runFolder: string): Promise<void> {
-    this.emitSse({ t: 'judge.started', col: columnId } as Omit<ServerSseEvent, 'seq'>);
+    this.emitSse({ t: 'judge.started', col: columnId, runFolder } as Omit<ServerSseEvent, 'seq'>);
     const runDir = join(this.opts.storageRoot, runFolder);
     const transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
     if (!transcript) {
       this.emitSse({
         t: 'judge.errored',
         col: columnId,
+        runFolder,
         error: 'transcript.json missing',
       } as Omit<ServerSseEvent, 'seq'>);
       return;
@@ -485,6 +486,7 @@ export class RunManager extends EventEmitter {
         this.emitSse({
           t: 'judge.errored',
           col: columnId,
+          runFolder,
           error: judgeFile.error ?? 'unknown error',
         } as Omit<ServerSseEvent, 'seq'>);
       }
@@ -492,6 +494,7 @@ export class RunManager extends EventEmitter {
       this.emitSse({
         t: 'judge.errored',
         col: columnId,
+        runFolder,
         error: (err as Error).message,
       } as Omit<ServerSseEvent, 'seq'>);
     }
