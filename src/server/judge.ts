@@ -927,15 +927,26 @@ function parseEnvelopeUsage(raw: string): EnvelopeUsage {
   if (usage && typeof usage === 'object') {
     const u = usage as Record<string, unknown>;
     out.tokenUsage = {
-      inputTokens: Number(u.input_tokens ?? 0),
-      cacheReadTokens: Number(u.cache_read_input_tokens ?? 0),
-      cacheCreationTokens: Number(u.cache_creation_input_tokens ?? 0),
-      outputTokens: Number(u.output_tokens ?? 0),
+      inputTokens: nonNegativeInt(u.input_tokens),
+      cacheReadTokens: nonNegativeInt(u.cache_read_input_tokens),
+      cacheCreationTokens: nonNegativeInt(u.cache_creation_input_tokens),
+      outputTokens: nonNegativeInt(u.output_tokens),
     };
   }
   const cost = env.total_cost_usd;
-  if (typeof cost === 'number') out.costUsd = cost;
+  if (typeof cost === 'number' && Number.isFinite(cost)) out.costUsd = cost;
   return out;
+}
+
+// Coerce an unknown envelope field to a non-negative integer. Anything that
+// isn't a finite number (NaN/Infinity/string/null/missing) becomes 0 — without
+// this guard, a malformed CLI envelope emitting `"input_tokens": "abc"` would
+// propagate `NaN` through `Number(...)` and the persisted JudgeFile would fail
+// the next page-load Zod parse against `TokenUsageSchema`'s `int().nonnegative`.
+function nonNegativeInt(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v ?? 0);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.trunc(n);
 }
 
 interface AttemptMeta {

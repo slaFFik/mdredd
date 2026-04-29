@@ -1768,6 +1768,60 @@ scenario('runJudge: captures usage + total_cost_usd from CLI envelope', async ()
   });
 });
 
+scenario('runJudge: malformed usage values are coerced to 0 (not NaN)', async () => {
+  // Defense-in-depth: if a future CLI emits `"input_tokens": "abc"` (or null,
+  // or Infinity), Number() would propagate NaN/Infinity into the persisted
+  // tokenUsage and the next reader's Zod parse against
+  // TokenUsageSchema.nonnegative.int would reject the whole judge.json.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: '75 not 100 because some claims unverified.',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall.',
+        },
+        usage: {
+          input_tokens: 'abc',
+          cache_read_input_tokens: null,
+          cache_creation_input_tokens: -50,
+          output_tokens: 256,
+        },
+        total_cost_usd: 'not-a-number',
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (!result.tokenUsage) throw new Error('expected tokenUsage to be populated');
+    if (result.tokenUsage.inputTokens !== 0) {
+      throw new Error(`expected non-finite "abc" → 0, got ${result.tokenUsage.inputTokens}`);
+    }
+    if (result.tokenUsage.cacheReadTokens !== 0) {
+      throw new Error(`expected null → 0, got ${result.tokenUsage.cacheReadTokens}`);
+    }
+    if (result.tokenUsage.cacheCreationTokens !== 0) {
+      throw new Error(`expected negative → 0, got ${result.tokenUsage.cacheCreationTokens}`);
+    }
+    if (result.tokenUsage.outputTokens !== 256) {
+      throw new Error(`valid number should be preserved, got ${result.tokenUsage.outputTokens}`);
+    }
+    if (result.costUsd !== undefined) {
+      throw new Error(`expected costUsd undefined for non-numeric, got ${result.costUsd}`);
+    }
+    // Round-trip: the persisted JudgeFile must validate on read; NaN
+    // propagation would have made this throw at parse time.
+    const persisted = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
+    if (persisted.tokenUsage.inputTokens !== 0) {
+      throw new Error('persisted tokenUsage corrupt');
+    }
+  });
+});
+
 scenario('runJudge: envelope without usage leaves JudgeFile fields unset', async () => {
   await withTmpRunDir(async (runDir) => {
     // VALID_JUDGE_RESULT has no usage / total_cost_usd keys.
