@@ -13,34 +13,25 @@ export interface StateSnapshot {
       config: RunConfig;
       transcript: TranscriptFile | null;
       judge: JudgeFile | null;
+      // Per-model judge snapshots (M4). Keys are model families
+      // (`haiku`/`sonnet`/`opus`); empty for runs created before this field
+      // existed. The legacy `judge` above is the latest run regardless of
+      // family; this map preserves prior runs across models.
+      judgesByModel: Record<string, JudgeFile>;
       outputs: OutputFile[];
     }
   >;
   activeStatuses: Record<string, ColumnStatus>;
 }
 
-function getToken(): string {
-  const params = new URLSearchParams(window.location.search);
-  const t = params.get('t') ?? '';
-  return t;
-}
-
-const TOKEN = getToken();
-
-function url(path: string): string {
-  const sep = path.includes('?') ? '&' : '?';
-  return `${path}${sep}t=${encodeURIComponent(TOKEN)}`;
-}
-
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...((init.headers as Record<string, string>) ?? {}),
-    'x-mdredd-token': TOKEN,
   };
   if (init.method && init.method !== 'GET' && !headers['content-type']) {
     headers['content-type'] = 'application/json';
   }
-  const res = await fetch(url(path), { ...init, headers });
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text || res.statusText);
@@ -146,7 +137,7 @@ export function openSseStream(
   onOpen?: () => void,
   onError?: () => void,
 ): EventSource {
-  const es = new EventSource(url('/sse'));
+  const es = new EventSource('/sse');
   es.onmessage = (msg) => {
     try {
       const ev = JSON.parse(msg.data) as ServerSseEvent;

@@ -4,13 +4,7 @@ import { join, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionStore } from './session.js';
 import { RunManager, RunManagerError } from './runManager.js';
-import {
-  type AuthContext,
-  extractTokenFromRequest,
-  isMutatingMethod,
-  originMatches,
-  tokenMatches,
-} from './security.js';
+import { type AuthContext, hostMatches, isMutatingMethod, originMatches } from './security.js';
 import { log } from './log.js';
 import { HEARTBEAT_INTERVAL_MS, JUDGE_MODEL_OPTIONS } from '@shared/constants.js';
 import { MAX_COLUMNS, makeBlankColumn, type ColumnConfig } from '@shared/schemas/session.js';
@@ -37,17 +31,44 @@ export function createRouter(deps: RouteDeps) {
     const method = (req.method ?? 'GET').toUpperCase();
 
     try {
-      // Auth: token is required on API + SSE; static assets (the SPA bundle) are token-free
-      // so the browser can load them without injecting tokens into asset URLs.
-      const requiresToken = path.startsWith('/api/') || path === '/sse';
-      if (requiresToken) {
-        const token = extractTokenFromRequest(req);
-        if (!tokenMatches(deps.auth.token, token)) {
-          return json(res, 401, { error: 'unauthorized' });
+      // Auth: API + SSE require a same-origin browser request.
+      //
+      // - **Host pin** (every protected request): blocks DNS rebinding. The
+      //   browser's Host header reflects the address-bar host, not the
+      //   resolved IP, so a rebound `evil.com:<port>` arrives here and gets
+      //   refused before any handler runs.
+      // - **Origin pin** (mutating requests only): blocks cross-origin
+      //   POST/PUT/DELETE/PATCH from a hostile page. Per the Fetch spec
+      //   browsers always include Origin on mutating requests; for
+      //   same-origin GET/HEAD they MAY omit it (Chrome sends it, Firefox
+      //   and Safari sometimes don't), so requiring Origin on GETs would
+      //   403 the SPA's own initial `/api/state` fetch in production.
+      //   Skipping Origin on GETs is safe because: (a) the Host pin still
+      //   blocks rebinding, and (b) cross-origin GET to a JSON endpoint
+      //   without CORS headers can't read the response — the browser SOP
+      //   handles that case for free.
+      //
+      // Static assets (SPA bundle) are unauthenticated so top-level
+      // navigations (no Origin header) can load the HTML.
+      //
+      // We deliberately do NOT use a per-launch session token: localhost-only
+      // dev tools share the threat model "if your user account is compromised,
+      // the OS sandbox is your boundary, not us". A persistent token would have
+      // forced the URL to change on every dev-server restart, which made the
+      // dev loop noisy without buying real defense-in-depth.
+      const requiresAuth = path.startsWith('/api/') || path === '/sse';
+      if (requiresAuth) {
+        if (!hostMatches(deps.auth.allowedHosts, req.headers.host)) {
+          return json(res, 403, { error: 'bad host' });
         }
-      }
-      if (isMutatingMethod(method)) {
-        if (!originMatches(deps.auth.origin, req.headers.origin as string | undefined)) {
+        const origin = req.headers.origin;
+        if (isMutatingMethod(method)) {
+          if (!originMatches(deps.auth.allowedOrigins, origin)) {
+            return json(res, 403, { error: 'bad origin' });
+          }
+        } else if (origin !== undefined && !originMatches(deps.auth.allowedOrigins, origin)) {
+          // GET/HEAD: Origin is optional, but if present it must match — a
+          // cross-origin browser that *did* send Origin is still hostile.
           return json(res, 403, { error: 'bad origin' });
         }
       }

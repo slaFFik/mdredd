@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import getPort from 'get-port';
 import open from 'open';
 import { runPreflight, writeLockMeta } from './preflight.js';
@@ -84,8 +85,8 @@ async function main(): Promise<void> {
       // lock (we just acquired it but never wrote the sidecar) and exit.
       writeLockMeta(preflight.lockFilePath, process.pid, port)
         .then(() => {
-          const apiUrl = `${auth.origin}/?t=${auth.token}`;
-          const devUrl = `http://127.0.0.1:${VITE_DEV_PORT}/?t=${auth.token}`;
+          const apiUrl = `http://127.0.0.1:${auth.port}/`;
+          const devUrl = `http://127.0.0.1:${VITE_DEV_PORT}/`;
           const browserUrl = isDev ? devUrl : apiUrl;
           log.info('server.listening', { url: apiUrl, pid: process.pid });
           console.log(`mdredd listening at ${apiUrl}`);
@@ -93,9 +94,7 @@ async function main(): Promise<void> {
             console.log(`open in browser (Vite + HMR): ${devUrl}`);
           }
           if (shouldOpen) {
-            open(browserUrl).catch((err) => {
-              console.log(`(could not open browser automatically: ${err.message})`);
-            });
+            void maybeOpen(browserUrl, isDev, preflight.storageRoot);
           }
         })
         .catch((err) => {
@@ -156,6 +155,46 @@ function resolveWebRoot(): string {
   // When compiled, this file lives at dist/server/index.js, so the web bundle
   // is at dist/web/ (one level up, then into web).
   return resolve(here, '..', 'web');
+}
+
+// Open the browser unless this is a tsx-watch-triggered dev restart. The URL
+// is stable across restarts (same-origin auth, no per-launch token), so the
+// already-open tab keeps working — repeated `open()` calls would just spam new
+// tabs/windows on each save. Prod launches always open: there is no restart
+// loop, so the user reaches mdredd through this path on purpose.
+async function maybeOpen(url: string, isDev: boolean, storageRoot: string): Promise<void> {
+  if (isDev && (await isDevRestartFromSameWatcher(storageRoot))) return;
+  try {
+    await open(url);
+  } catch (err) {
+    console.log(`(could not open browser automatically: ${(err as Error).message})`);
+  }
+}
+
+// True iff a marker file under storageRoot records a previous launch with the
+// same parent pid as this process. tsx-watch is the parent across restarts of
+// the same `npm run dev` invocation, so a matching parent pid means "this is a
+// hot-restart, the user already has the tab open." A different (or absent)
+// parent pid means a fresh `npm run dev` was launched — open the browser.
+async function isDevRestartFromSameWatcher(storageRoot: string): Promise<boolean> {
+  const markerPath = join(storageRoot, '.dev-open-marker');
+  const ppid = process.ppid;
+  let isRestart = false;
+  try {
+    const raw = await readFile(markerPath, 'utf8');
+    const parsed = JSON.parse(raw) as { parentPid?: number };
+    if (parsed.parentPid === ppid) isRestart = true;
+  } catch {
+    /* missing/malformed marker: treat as first launch */
+  }
+  // Refresh the marker so the *next* restart finds our pid. Best-effort write:
+  // a failure only causes one redundant browser open, never a broken launch.
+  try {
+    await writeFile(markerPath, JSON.stringify({ parentPid: ppid }), 'utf8');
+  } catch {
+    /* swallow */
+  }
+  return isRestart;
 }
 
 main().catch((err) => {

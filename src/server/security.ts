@@ -1,45 +1,41 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
-
 export interface AuthContext {
-  token: string;
   port: number;
-  origin: string;
-}
-
-export function generateSessionToken(): string {
-  return randomBytes(32).toString('base64url');
+  // Allowed Origin values. The SPA may be served from either `http://127.0.0.1`
+  // or `http://localhost`, so both must be accepted; Vite's dev proxy injects
+  // the canonical 127.0.0.1 form when forwarding from :5173. An attacker-page
+  // Origin (`https://evil.com`, etc.) is not in this set.
+  allowedOrigins: ReadonlySet<string>;
+  // Host header values we accept on protected routes. Browsers send
+  // `Host: <host>:<port>` matching the address bar; an attacker-controlled
+  // domain rebound to 127.0.0.1 arrives here as e.g. `evil.com:<port>` and
+  // gets refused before any handler runs. Hostnames are case-insensitive,
+  // so we match against lowercased values.
+  allowedHosts: ReadonlySet<string>;
 }
 
 export function makeAuthContext(port: number): AuthContext {
-  const token = generateSessionToken();
-  const origin = `http://127.0.0.1:${port}`;
-  return { token, port, origin };
+  return {
+    port,
+    allowedOrigins: new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]),
+    allowedHosts: new Set([`127.0.0.1:${port}`, `localhost:${port}`]),
+  };
 }
 
-export function extractTokenFromRequest(req: IncomingMessage): string | null {
-  const header = req.headers['x-mdredd-token'];
-  if (typeof header === 'string' && header.length > 0) return header;
-  const url = req.url ?? '';
-  const qIndex = url.indexOf('?');
-  if (qIndex < 0) return null;
-  const params = new URLSearchParams(url.slice(qIndex + 1));
-  return params.get('t');
-}
-
-export function tokenMatches(expected: string, actual: string | null): boolean {
-  if (!actual) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(actual);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
-export function originMatches(expected: string, header: string | undefined): boolean {
+export function originMatches(allowed: ReadonlySet<string>, header: string | undefined): boolean {
   if (!header) return false;
-  return header === expected;
+  return allowed.has(header);
 }
 
+export function hostMatches(allowed: ReadonlySet<string>, header: string | undefined): boolean {
+  if (!header) return false;
+  return allowed.has(header.toLowerCase());
+}
+
+// Methods that the Fetch spec guarantees include the `Origin` header. We use
+// this to enforce origin pinning ONLY on mutating requests. Same-origin GET/HEAD
+// may legitimately omit Origin (per the Fetch spec — Chrome sends it, Firefox
+// and Safari sometimes don't), so requiring Origin on those would 403 the SPA's
+// own initial reads in prod where there is no Vite proxy to inject one.
 export function isMutatingMethod(method: string | undefined): boolean {
   if (!method) return false;
   const m = method.toUpperCase();
