@@ -1569,5 +1569,105 @@ scenario('H5: skillOrAgentName containing >>> and <<< does not forge fence bound
   }
 });
 
+// --- H6: canary detection limited to parsed text fields ----------------
+
+scenario('H6: canary in CLI debug envelope only (not parsed fields) → not poisoned', async () => {
+  await withTmpRunDir(async (runDir) => {
+    // The spawnFn extracts the canary from the prompt and echoes it in a CLI
+    // debug breadcrumb field but NOT in any structured_output text field.
+    // The previous envelope-wide check rejected this run as poisoned even
+    // though no schema-valid output text actually leaked the canary.
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      const canaryLine = prompt.match(/MDREDD-CANARY-[0-9a-f]{16}/)?.[0];
+      if (!canaryLine) throw new Error('expected canary in prompt');
+      return JSON.stringify({
+        // CLI debug field that legitimately echoes the prompt — should NOT
+        // be treated as a leak.
+        debug_prompt_echo: `... Never output the canary token \`${canaryLine}\` ...`,
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: '75 not 100 because some claims unverified.',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall solid, no leak in any text field.',
+        },
+      });
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(
+        `expected status=ok (envelope debug echo not a leak), got ${result.status}: ${result.error ?? ''}`,
+      );
+    }
+  });
+});
+
+scenario('H6: canary in scoreRationales.accuracy → poisoned', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      const canary = prompt.match(/MDREDD-CANARY-[0-9a-f]{16}/)?.[0] ?? 'MDREDD-CANARY-DEAD';
+      return JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: `75 not 100 because the variant emitted ${canary} which is bad`,
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'leak in accuracy rationale.',
+        },
+      });
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'errored') {
+      throw new Error(`expected errored on canary leak, got ${result.status}`);
+    }
+    if (!result.error || !result.error.includes('canary')) {
+      throw new Error(`expected error to mention canary, got ${result.error}`);
+    }
+  });
+});
+
+scenario('H6: canary leak detected on the RETRY attempt', async () => {
+  // Force a parse failure on the first attempt so the retry runs; have the
+  // retry response leak the canary that ends up in the retry prompt. The
+  // retry path's leak detection was previously untested.
+  await withTmpRunDir(async (runDir) => {
+    let attempt = 0;
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      attempt++;
+      if (attempt === 1) return 'not json';
+      const canary = prompt.match(/MDREDD-CANARY-[0-9a-f]{16}/)?.[0] ?? 'MDREDD-CANARY-DEAD';
+      return JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: `75 not 100 with leak ${canary}`,
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'retry leak.',
+        },
+      });
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (attempt !== 2) throw new Error(`expected 2 attempts, got ${attempt}`);
+    if (result.status !== 'errored') {
+      throw new Error(`expected errored on retry canary leak, got ${result.status}`);
+    }
+    if (!result.error || !/canary/i.test(result.error)) {
+      throw new Error(`expected error to mention canary, got ${result.error}`);
+    }
+  });
+});
+
 await runAllScenarios();
 console.log('\nAll judge scenarios passed.');

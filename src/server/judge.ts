@@ -344,8 +344,17 @@ function sanitizeLabel(s: string): string {
     .slice(0, 100);
 }
 
-function detectCanaryLeak(raw: string, canary: string): boolean {
-  return raw.includes(canary);
+// Walk the parsed text fields the judge actually emitted and check each one
+// for the canary. CLI debug envelope fields (model_id, partial-thinking
+// metadata, raw echoes of the prompt) are NOT inspected — those can
+// legitimately contain the canary as a benign echo of the system prompt.
+function detectCanaryLeakInOutput(out: JudgeModelOutput, canary: string): boolean {
+  if (out.rationale.includes(canary)) return true;
+  if (out.scoreRationales.accuracy.includes(canary)) return true;
+  if (out.scoreRationales.completeness.includes(canary)) return true;
+  if (out.scoreRationales.adherence.includes(canary)) return true;
+  if (out.scoreRationales.clarity.includes(canary)) return true;
+  return false;
 }
 
 // Aggregate `assistant` messages from real claude come after each `message_stop` and
@@ -646,14 +655,22 @@ async function attemptJudge(
     throw err;
   }
   await writeRawResponse(runDir, label, raw);
-  if (detectCanaryLeak(raw, canary)) {
-    log.warn('judge.canary-leak', { attempt: label });
-    throw new Error(
-      `judge output contained the canary token on ${label} attempt, indicating prompt injection from variant or transcript content; scores discarded`,
-    );
-  }
   const parsed = tryParseJudgeOutput(raw);
-  if (parsed.ok) return { ok: true, value: parsed.value };
+  if (parsed.ok) {
+    // Canary detection runs against parsed text fields only. The raw envelope
+    // can include CLI debug breadcrumbs (model_id, partial-thinking metadata,
+    // etc.) that may legitimately contain the canary as a verbatim echo of
+    // the prompt; matching against the whole envelope produced false
+    // positives that rejected valid runs (issue H6). Only the schema-valid
+    // text fields are real attack surface.
+    if (detectCanaryLeakInOutput(parsed.value, canary)) {
+      log.warn('judge.canary-leak', { attempt: label });
+      throw new Error(
+        `judge output contained the canary token on ${label} attempt, indicating prompt injection from variant or transcript content; scores discarded`,
+      );
+    }
+    return { ok: true, value: parsed.value };
+  }
   return { ok: false, kind: 'parse', error: parsed.error, code: parsed.code };
 }
 
