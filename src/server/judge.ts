@@ -13,14 +13,11 @@ import {
   JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES,
   JUDGE_OUTPUT_FILE_CAP_BYTES,
   JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
-  JUDGE_TIMEOUT_MS_BY_FAMILY,
-  JUDGE_TIMEOUT_MS_DEFAULT,
+  JUDGE_TIMEOUT_MS,
   STREAM_TOOL_ARGS_CAP_CHARS,
   STREAM_TOOL_RESULT_CAP_CHARS,
   defaultEffortForModel,
   effortLevelsForModel,
-  modelFamily,
-  type Effort,
 } from '@shared/constants.js';
 import {
   JUDGE_MODEL_JSON_SCHEMA,
@@ -77,10 +74,7 @@ export class JudgeTimeoutError extends Error {
   }
 }
 
-// Legacy single-valued timeout retained for compatibility with imports outside
-// this module. The actual judge timeout is now resolved per call via
-// `timeoutForJudgeModel` (model-family aware).
-export const JUDGE_SUBPROCESS_TIMEOUT_MS = JUDGE_TIMEOUT_MS_DEFAULT;
+export const JUDGE_SUBPROCESS_TIMEOUT_MS = JUDGE_TIMEOUT_MS;
 
 export type SpawnJudgeFn = (
   claudeBin: string,
@@ -89,8 +83,8 @@ export type SpawnJudgeFn = (
 ) => Promise<string>;
 
 export interface RunJudgeOptions {
-  // Test-only: override the subprocess spawn so the retry/timeout paths can
-  // be exercised without launching real Haiku.
+  // Test-only: override the subprocess spawn so spec tests don't have to
+  // launch real Haiku.
   spawnFn?: SpawnJudgeFn;
 }
 
@@ -273,30 +267,15 @@ export interface JudgePromptArtifacts {
   sectionBytes: JudgeAttemptSectionBytes;
 }
 
-export interface BuildJudgePromptOptions {
-  // Multiplies every byte/char cap on untrusted sections. Used on timeout retry
-  // (e.g. 0.5) to shrink the prompt so the second judge call has less to chew on.
-  bytesCapMultiplier?: number;
-}
-
-export function buildJudgePrompt(
-  input: JudgeInput,
-  opts: BuildJudgePromptOptions = {},
-): JudgePromptArtifacts {
+export function buildJudgePrompt(input: JudgeInput): JudgePromptArtifacts {
   const { runConfig, transcript, variantContent, outputs, outputContents } = input;
-  // Default to 1 if the option is missing or non-finite/non-positive; otherwise
-  // multiplier values like NaN or Infinity would propagate through Math.floor and
-  // produce empty or runaway prompt sections.
-  const rawMultiplier = opts.bytesCapMultiplier ?? 1;
-  const m = Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : 1;
-  // Floors keep retries useful even if a future caller passes a very small multiplier.
-  const promptCap = Math.max(256, Math.floor(JUDGE_PROMPT_CAP_BYTES * m));
-  const variantCap = Math.max(512, Math.floor(JUDGE_VARIANT_CAP_BYTES * m));
-  const finalMessageCap = Math.max(256, Math.floor(JUDGE_FINAL_MESSAGE_CAP_BYTES * m));
-  const toolSummaryCap = Math.max(80, Math.floor(JUDGE_TOOL_SUMMARY_CAP_CHARS * m));
-  const toolSectionCap = Math.max(2048, Math.floor(JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES * m));
-  const outputFileCap = Math.max(512, Math.floor(JUDGE_OUTPUT_FILE_CAP_BYTES * m));
-  const outputsSectionCap = Math.max(2048, Math.floor(JUDGE_OUTPUTS_TOTAL_CAP_BYTES * m));
+  const promptCap = JUDGE_PROMPT_CAP_BYTES;
+  const variantCap = JUDGE_VARIANT_CAP_BYTES;
+  const finalMessageCap = JUDGE_FINAL_MESSAGE_CAP_BYTES;
+  const toolSummaryCap = JUDGE_TOOL_SUMMARY_CAP_CHARS;
+  const toolSectionCap = JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES;
+  const outputFileCap = JUDGE_OUTPUT_FILE_CAP_BYTES;
+  const outputsSectionCap = JUDGE_OUTPUTS_TOTAL_CAP_BYTES;
   // 64 bits of entropy each: too large to brute-force a guess from inside the
   // sandboxed variant, so the data fences and canary cannot be forged.
   const nonce = randomBytes(8).toString('hex');
@@ -942,13 +921,8 @@ function nonNegativeInt(v: unknown): number {
 }
 
 interface AttemptMeta {
-  label: 'first' | 'retry';
   model: string;
-  // undefined → spawnJudge resolves to model default; null → --effort omitted.
-  effort?: Effort | null;
-  capMultiplier: number;
   sectionBytes: JudgeAttemptSectionBytes;
-  retryReason: 'timeout' | 'parse' | null;
   canary: string;
 }
 
@@ -958,19 +932,12 @@ function recordAttempt(
   promptTotalBytes: number,
   result: JudgeAttemptResultKind,
 ): void {
-  // Record the *resolved* effort so the file shows what the model actually saw,
-  // not the per-attempt placeholder. Undefined-in-meta means "use model default";
-  // null means --effort was explicitly omitted (Haiku-style).
-  const resolvedEffort =
-    meta.effort === undefined ? defaultEffortForModel(meta.model) : meta.effort;
   attempts.push({
-    label: meta.label,
+    label: 'first',
     model: meta.model,
-    effort: resolvedEffort ?? null,
-    capMultiplier: meta.capMultiplier,
+    effort: defaultEffortForModel(meta.model) ?? null,
     promptTotalBytes,
     sectionBytes: meta.sectionBytes,
-    retryReason: meta.retryReason,
     canaryHashSha256: createHash('sha256').update(meta.canary).digest('hex'),
     result,
   });
@@ -987,27 +954,18 @@ async function attemptJudge(
   const promptTotalBytes = Buffer.byteLength(prompt, 'utf8');
   let raw: string;
   try {
-    const spawnOpts: SpawnJudgeOptions = { jsonSchema: true, model: meta.model };
-    if (meta.effort !== undefined) spawnOpts.effort = meta.effort;
-    raw = await spawnFn(claudeBin, prompt, spawnOpts);
+    raw = await spawnFn(claudeBin, prompt, { jsonSchema: true, model: meta.model });
   } catch (err) {
     if (err instanceof JudgeTimeoutError) {
-      log.warn('judge.attempt-timeout', { attempt: meta.label, error: err.message });
+      log.warn('judge.attempt-timeout', { error: err.message });
       recordAttempt(attempts, meta, promptTotalBytes, 'timeout');
       return { ok: false, kind: 'timeout', error: err.message };
     }
-    // Any other spawn failure (ENOENT, non-zero exit, EACCES, IO error). Record
-    // it so `judge.attempts.json` still surfaces the attempt — without this,
-    // a missing claudeBin or crashed subprocess would silently leave the
-    // attempts file empty even though the JudgeFile error was set.
-    log.warn('judge.attempt-spawn-error', {
-      attempt: meta.label,
-      error: (err as Error).message,
-    });
+    log.warn('judge.attempt-spawn-error', { error: (err as Error).message });
     recordAttempt(attempts, meta, promptTotalBytes, 'spawn_error');
     throw err;
   }
-  await writeRawResponse(runDir, meta.label, raw);
+  await writeRawResponse(runDir, 'first', raw);
   const parsed = tryParseJudgeOutput(raw);
   if (parsed.ok) {
     // Canary detection runs against parsed text fields only. The raw envelope
@@ -1017,10 +975,10 @@ async function attemptJudge(
     // positives that rejected valid runs (issue H6). Only the schema-valid
     // text fields are real attack surface.
     if (detectCanaryLeakInOutput(parsed.value, meta.canary)) {
-      log.warn('judge.canary-leak', { attempt: meta.label });
+      log.warn('judge.canary-leak', {});
       recordAttempt(attempts, meta, promptTotalBytes, 'canary_leak');
       throw new Error(
-        `judge output contained the canary token on ${meta.label} attempt, indicating prompt injection from variant or transcript content; scores discarded`,
+        'judge output contained the canary token, indicating prompt injection from variant or transcript content; scores discarded',
       );
     }
     recordAttempt(attempts, meta, promptTotalBytes, 'ok');
@@ -1028,17 +986,6 @@ async function attemptJudge(
   }
   recordAttempt(attempts, meta, promptTotalBytes, 'parse_failure');
   return { ok: false, kind: 'parse', error: parsed.error, code: parsed.code };
-}
-
-// Drop the model's current effort one notch toward "low". Returns null when the
-// model has no effort levels (e.g. Haiku) or when current is already the lowest.
-function lowerEffort(model: string, current: Effort | null): Effort | null {
-  if (!current) return null;
-  const levels = effortLevelsForModel(model);
-  if (levels.length === 0) return null;
-  const idx = levels.indexOf(current);
-  if (idx <= 0) return null;
-  return levels[idx - 1] ?? null;
 }
 
 export interface InvokeJudgeResult {
@@ -1049,9 +996,9 @@ export interface InvokeJudgeResult {
   // simply stay unset.
   tokenUsage?: TokenUsage;
   costUsd?: number;
-  // Per-attempt observability records, in execution order. Returned (rather
-  // than accepted as an out-parameter) so callers cannot accidentally drop
-  // them — runJudge persists this to `judge.attempts.json`.
+  // Observability record for the attempt — always exactly one entry. Array
+  // shape preserved for backward compatibility with the persisted
+  // `judge.attempts.json` schema.
   attempts: JudgeAttempt[];
 }
 
@@ -1065,8 +1012,8 @@ function toInvokeResult(
   return out;
 }
 
-// Thrown when invokeJudge gives up after the retry. Carries the attempts array
-// so runJudge can persist it on the error path without a separate out-param.
+// Thrown when invokeJudge gives up. Carries the attempts array so runJudge can
+// persist it on the error path without a separate out-param.
 class JudgeFailedError extends Error {
   override readonly name = 'JudgeFailedError';
   constructor(
@@ -1084,8 +1031,6 @@ export async function invokeJudge(
   const attempts: JudgeAttempt[] = [];
   const { claudeBin, runDir } = input;
   const judgeModel = input.judgeModel ?? JUDGE_MODEL;
-  // Pre-read output files once so the (possibly halved-cap) retry can re-trim
-  // the same in-memory bytes instead of touching disk twice.
   const outputContents =
     input.runConfig.mode === 'write' && input.outputContents === undefined
       ? await readOutputContents(input.runDir, input.outputs)
@@ -1093,91 +1038,22 @@ export async function invokeJudge(
   const enriched: JudgeInput = { ...input, outputContents };
   const built = buildJudgePrompt(enriched);
 
-  const firstMeta: AttemptMeta = {
-    label: 'first',
+  const meta: AttemptMeta = {
     model: judgeModel,
-    capMultiplier: 1,
     sectionBytes: built.sectionBytes,
-    retryReason: null,
     canary: built.canary,
   };
-  // Any throw inside the body — canary leak from attemptJudge, spawn failure,
-  // explicit retry-exhaustion below — is rewrapped as `JudgeFailedError` so
-  // the caller can recover the in-flight `attempts` for `judge.attempts.json`.
   try {
-    const first = await attemptJudge(spawnFn, claudeBin, built.prompt, runDir, firstMeta, attempts);
-    if (first.ok) return toInvokeResult(first, attempts);
-
-    // Build the retry prompt. A timeout is treated like a schema failure for
-    // retry purposes (issue #12), but the retry shrinks the input AND drops
-    // one effort notch (e.g. opus xhigh → high) so the second attempt has a
-    // real chance to finish under the model-family timeout. Schema-failure
-    // retries keep the original prompt + effort and only append a hint about
-    // the parse error.
-    let retryPrompt: string;
-    let retryCanary: string;
-    let retryEffort: Effort | null | undefined;
-    let retrySectionBytes: JudgeAttemptSectionBytes;
-    let retryCapMultiplier: number;
-    if (first.kind === 'timeout') {
-      const baseEffort = defaultEffortForModel(judgeModel);
-      const dropped = lowerEffort(judgeModel, baseEffort);
-      // For Haiku (no effort menu), `dropped` is null and `retryEffort` stays
-      // undefined → spawnJudge falls back to the model default (also null).
-      if (dropped !== null) retryEffort = dropped;
-      log.warn('judge.first-attempt-invalid', {
-        reason: 'timeout',
-        error: first.error,
-        retryStrategy: dropped ? 'halve-input-caps + drop-effort' : 'halve-input-caps',
-        effortFrom: baseEffort,
-        effortTo: retryEffort ?? baseEffort,
-      });
-      const rebuilt = buildJudgePrompt(enriched, { bytesCapMultiplier: 0.5 });
-      retryPrompt = rebuilt.prompt;
-      retryCanary = rebuilt.canary;
-      retrySectionBytes = rebuilt.sectionBytes;
-      retryCapMultiplier = 0.5;
-    } else {
-      log.warn('judge.first-attempt-invalid', {
-        reason: 'parse',
-        error: first.error,
-        code: first.code,
-      });
-      // Splice ONLY the stable code (e.g. E_SCHEMA_FAIL, E_JSON_PARSE) into
-      // the retry prompt. The free-form error message can echo Zod-rendered
-      // fragments of the first response, and the first response is untrusted
-      // — embedding it here would let a poisoned first response steer the
-      // retry, bypassing the <<<UNTRUSTED-DATA-{nonce}>>> fence (issue C2).
-      retryPrompt =
-        `${built.prompt}\n\n# Retry required\n` +
-        `Your previous response did not match the required shape. Parser code: ${first.code}\n` +
-        `Emit ONLY the JSON object described above — no markdown, no prose, no code fences. ` +
-        `The first character MUST be "{" and the last MUST be "}". Include all four score keys (accuracy, completeness, adherence, clarity) and the rationale field.`;
-      retryCanary = built.canary;
-      retrySectionBytes = built.sectionBytes;
-      retryCapMultiplier = 1;
-    }
-
-    const retryMeta: AttemptMeta = {
-      label: 'retry',
-      model: judgeModel,
-      effort: retryEffort,
-      capMultiplier: retryCapMultiplier,
-      sectionBytes: retrySectionBytes,
-      retryReason: first.kind === 'timeout' ? 'timeout' : 'parse',
-      canary: retryCanary,
-    };
-    const second = await attemptJudge(spawnFn, claudeBin, retryPrompt, runDir, retryMeta, attempts);
-    if (second.ok) return toInvokeResult(second, attempts);
-
-    if (second.kind === 'timeout') {
+    const result = await attemptJudge(spawnFn, claudeBin, built.prompt, runDir, meta, attempts);
+    if (result.ok) return toInvokeResult(result, attempts);
+    if (result.kind === 'timeout') {
       throw new Error(
-        `judge timed out on retry after ${first.kind === 'timeout' ? 'an initial timeout' : 'a schema failure'}. ` +
-          `Raw responses (if any) saved to ${join(runDir, 'judge.raw-response.log')}.`,
+        `judge subprocess timed out: ${result.error}. ` +
+          `Raw response (if any) saved to ${join(runDir, 'judge.raw-response.log')}.`,
       );
     }
     throw new Error(
-      `judge output invalid after retry: ${second.error}. Raw responses saved to ${join(runDir, 'judge.raw-response.log')}.`,
+      `judge output invalid: ${result.error}. Raw response saved to ${join(runDir, 'judge.raw-response.log')}.`,
     );
   } catch (err) {
     if (err instanceof JudgeFailedError) throw err;
@@ -1198,21 +1074,6 @@ async function writeRawResponse(runDir: string, label: string, raw: string): Pro
 export interface SpawnJudgeOptions {
   jsonSchema: boolean;
   model: string;
-  // Override the model's default effort. Used by the timeout-retry path to drop
-  // one notch (e.g. opus xhigh → high) so the second attempt has a real chance
-  // to finish under the model-family timeout. `null` explicitly disables --effort
-  // (e.g. for Haiku); `undefined` means "use the model's default".
-  effort?: Effort | null;
-}
-
-// Resolve the model-family timeout. Falls back to the legacy 120s when the model
-// string isn't recognized — keeps existing tests working.
-export function timeoutForJudgeModel(model: string): number {
-  const family = modelFamily(model);
-  if (family && JUDGE_TIMEOUT_MS_BY_FAMILY[family] !== undefined) {
-    return JUDGE_TIMEOUT_MS_BY_FAMILY[family];
-  }
-  return JUDGE_TIMEOUT_MS_DEFAULT;
 }
 
 function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions): Promise<string> {
@@ -1233,11 +1094,7 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
       'user',
       '--disable-slash-commands',
     ];
-    // Judge runs at the model's default effort unless the caller overrode it
-    // (e.g. timeout-retry drops one notch). Mirrors the runner's belt-and-
-    // suspenders check so a hypothetical mismatch silently drops --effort
-    // instead of failing.
-    const effort = opts.effort === undefined ? defaultEffortForModel(opts.model) : opts.effort;
+    const effort = defaultEffortForModel(opts.model);
     if (effort && effortLevelsForModel(opts.model).includes(effort)) {
       args.push('--effort', effort);
     }
@@ -1260,13 +1117,14 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
     let stderr = '';
     proc.stdout.on('data', (d) => (stdout += d.toString()));
     proc.stderr.on('data', (d) => (stderr += d.toString()));
-    const timeoutMs = timeoutForJudgeModel(opts.model);
     const timer = setTimeout(() => {
       proc.kill('SIGKILL');
       reject(
-        new JudgeTimeoutError(`judge subprocess timed out after ${Math.round(timeoutMs / 1000)}s`),
+        new JudgeTimeoutError(
+          `judge subprocess timed out after ${Math.round(JUDGE_TIMEOUT_MS / 1000)}s`,
+        ),
       );
-    }, timeoutMs);
+    }, JUDGE_TIMEOUT_MS);
     proc.on('error', (err) => {
       clearTimeout(timer);
       reject(err);
@@ -1282,9 +1140,9 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
   });
 }
 
-// Stable, content-free error codes spliced into retry prompts. The free-form
-// `error` string is for logs only; nothing derived from a (possibly-poisoned)
-// first response goes back into the model's retry context.
+// Stable, content-free error codes for parse/schema failures. The free-form
+// `error` string is logged; the `code` is the machine-readable discriminator
+// recorded on the failed attempt.
 type ParseError = { ok: false; error: string; code: string };
 type ParseResult = { ok: true; value: JudgeModelOutput } | ParseError;
 

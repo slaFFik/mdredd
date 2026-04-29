@@ -114,17 +114,14 @@ export const JudgeAttemptSectionBytesSchema = z.object({
 export type JudgeAttemptSectionBytes = z.infer<typeof JudgeAttemptSectionBytesSchema>;
 
 export const JudgeAttemptSchema = z.object({
-  label: z.enum(['first', 'retry']),
+  label: z.literal('first'),
   model: z.string(),
   // Effort flag actually passed to spawnJudge. `null` means --effort was omitted
   // (e.g. Haiku, no effort menu). Stringified so future effort levels load on
   // older clients without a schema bump.
   effort: z.string().nullable(),
-  capMultiplier: z.number().positive(),
   promptTotalBytes: z.number().int().nonnegative(),
   sectionBytes: JudgeAttemptSectionBytesSchema,
-  // Why this attempt is a retry. Null on the first attempt.
-  retryReason: z.enum(['timeout', 'parse']).nullable(),
   // SHA-256 of the canary token. Lets us correlate a leaked canary across logs
   // without persisting the secret itself.
   canaryHashSha256: z.string(),

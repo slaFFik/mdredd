@@ -1,4 +1,9 @@
 export const STORAGE_DIR_NAME = '.mdredd';
+// Per-project subdirectory under STORAGE_DIR_NAME. Each cwd gets its own
+// folder keyed by a hash of its absolute path so two mdredds in different
+// projects can run simultaneously without sharing a lock or session.
+export const PROJECTS_DIR_NAME = 'projects';
+export const PROJECT_INFO_FILE = 'project.json';
 export const LOCK_FILE = '.lock';
 export const SESSION_FILE = 'session.json';
 export const GITIGNORE_FILE = '.gitignore';
@@ -51,8 +56,9 @@ export const STREAM_TOOL_RESULT_CAP_CHARS = 1024;
 export const JUDGE_PROMPT_CAP_BYTES = 4 * 1024;
 export const JUDGE_VARIANT_CAP_BYTES = 8 * 1024;
 export const JUDGE_FINAL_MESSAGE_CAP_BYTES = 4 * 1024;
-// Per-tool re-cap at judge time. ≥ stream caps is a no-op for individual
-// values; the retry shrink (× 0.5) brings it below to fit the smaller budget.
+// Per-tool re-cap at judge time. Equal to STREAM_TOOL_*_CAP_CHARS so this is
+// effectively a no-op for individual values, but kept as a separate constant
+// so the judge-side budget can diverge from the stream cap if needed.
 export const JUDGE_TOOL_SUMMARY_CAP_CHARS = 1024;
 // Aggregate cap on the joined tool-summary section. Drops the oldest tool
 // calls first when over budget so the most recent (closest to the final
@@ -86,18 +92,10 @@ export const OPUS_EFFORT_DEFAULT: Effort = 'xhigh';
 export const SONNET_EFFORT_DEFAULT: Effort = 'high';
 export const HAIKU_EFFORT_DEFAULT: Effort | null = null;
 
-// Per-family judge subprocess timeout. Haiku is fast (90s is generous for
-// the prompt sizes we ship); Sonnet/Opus run slower at default effort and
-// can deterministically miss the 120s ceiling that used to be one-size-
-// fits-all. Opus xhigh on a 48 KiB prompt + 4 KiB output frequently
-// crosses 4 minutes.
-export const JUDGE_TIMEOUT_MS_BY_FAMILY: Record<'haiku' | 'sonnet' | 'opus', number> = {
-  haiku: 90_000,
-  sonnet: 180_000,
-  opus: 360_000,
-};
-
-export const JUDGE_TIMEOUT_MS_DEFAULT = 120_000;
+// Judge subprocess timeout. Sized for the slowest expected case (Opus xhigh on
+// a long transcript) since there is no retry path to fall back on — a too-tight
+// timeout would surface as a hard failure instead of a slow-but-correct score.
+export const JUDGE_TIMEOUT_MS = 600_000;
 
 // Maps either a CLI alias (`opus`, `sonnet`, `haiku`) or a concrete pinned ID
 // (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) onto its
