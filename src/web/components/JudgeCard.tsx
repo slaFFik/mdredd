@@ -2,6 +2,15 @@ import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { JSX, ReactNode } from 'react';
 import { Hint } from './Hint.js';
 
+function renderRationale(text: string): ReactNode[] {
+  return text.split(/(`[^`]+`)/g).map((part, i) => {
+    if (part.length > 1 && part.startsWith('`') && part.endsWith('`')) {
+      return <code key={i}>{part.slice(1, -1)}</code>;
+    }
+    return part;
+  });
+}
+
 function ScoreRow(props: {
   label: string;
   score: number;
@@ -20,7 +29,7 @@ function ScoreRow(props: {
   );
   if (!props.rationale) return row as JSX.Element;
   return (
-    <Hint content={props.rationale} side="left" align="center">
+    <Hint content={renderRationale(props.rationale)} side="left" align="center">
       {row}
     </Hint>
   );

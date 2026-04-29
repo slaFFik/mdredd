@@ -587,6 +587,13 @@ body {
 .hint-arrow {
   fill: var(--bg-elev-2);
 }
+.hint code {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0 4px;
+  border-radius: 2px;
+}
 
 .add-column {
   flex: 0 0 auto;
