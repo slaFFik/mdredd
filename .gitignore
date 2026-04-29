@@ -8,3 +8,6 @@ coverage
 *.tgz
 .idea
 .vscode
+.claude/settings.local.json
+.claude/.DS_Store
+.claude/skills/.DS_Store
