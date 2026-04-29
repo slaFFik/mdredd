@@ -469,16 +469,66 @@ scenario('extractToolSummary: error flag carries through', () => {
   expect(lines[0]!, 'Read(r-args) → permission denied [error]', 'error flag');
 });
 
-scenario('extractToolSummary: unknown id falls back to FIFO oldest-first', () => {
-  // tool_result references an unknown id. Code should fall back to FIFO so the
-  // attribution is deterministic instead of being lost.
+// --- H1: FIFO fallback only when transcript is fully id-less ------------
+
+scenario(
+  'H1: id-bearing transcript with one unmatched result emits explicit unmatched line',
+  () => {
+    // tu-0 is paired by id. tu-99-unknown is unmatched and the transcript HAS
+    // ids, so we must NOT FIFO-rebind to tu-1 (a real, unrelated parallel call).
+    const lines = extractToolSummary(
+      makeTranscript([
+        toolUse('Read', 'r-args', 'tu-0'),
+        toolUse('Grep', 'g-args', 'tu-1'),
+        toolResult('Read', 'r-body', { id: 'tu-0' }),
+        toolResult('Bogus', 'orphan-body', { id: 'tu-99-unknown' }),
+      ]),
+    );
+    expect(lines[0]!, 'Read(r-args) → r-body', 'tu-0 paired by id');
+    expect(
+      lines[1]!,
+      '[unmatched tool_result for id=tu-99-unknown] → orphan-body',
+      'orphan emits explicit unmatched line',
+    );
+    // tu-1 was never resolved → dangling toolUse line.
+    expect(lines[2]!, 'Grep(g-args) → (no result observed)', 'dangling tu-1');
+    if (lines.length !== 3) throw new Error(`expected 3 lines, got ${lines.length}`);
+  },
+);
+
+scenario('H1: fully id-less transcript still uses FIFO', () => {
+  // Pre-fix transcripts (no id field) should still produce a sensible pairing
+  // when results arrive in the same order as uses.
+  const lines = extractToolSummary(
+    makeTranscript([
+      toolUse('A', 'a-args'),
+      toolUse('B', 'b-args'),
+      toolResult('A', 'a-body'),
+      toolResult('B', 'b-body'),
+    ]),
+  );
+  if (lines.length !== 2) throw new Error(`expected 2 lines, got ${lines.length}`);
+  expect(lines[0]!, 'A(a-args) → a-body', 'fifo first');
+  expect(lines[1]!, 'B(b-args) → b-body', 'fifo second');
+});
+
+scenario('H1: all-id reordered/parallel results pair correctly by id (regression)', () => {
+  // Three parallel tool calls, results arrive out of order. Every event has an
+  // id so FIFO must NOT engage; pairing must be strictly by id.
   const lines = extractToolSummary(
     makeTranscript([
       toolUse('Read', 'r-args', 'tu-0'),
-      toolResult('Read', 'r-body', { id: 'tu-99-unknown' }),
+      toolUse('Glob', 'g-args', 'tu-1'),
+      toolUse('Grep', 'gp-args', 'tu-2'),
+      toolResult('Grep', 'gp-body', { id: 'tu-2' }),
+      toolResult('Read', 'r-body', { id: 'tu-0' }),
+      toolResult('Glob', 'g-body', { id: 'tu-1' }),
     ]),
   );
-  expect(lines[0]!, 'Read(r-args) → r-body', 'fallback when id mismatched');
+  if (lines.length !== 3) throw new Error(`expected 3 lines, got ${lines.length}`);
+  expect(lines[0]!, 'Grep(gp-args) → gp-body', 'first by arrival order, paired by id');
+  expect(lines[1]!, 'Read(r-args) → r-body', 'second paired by id');
+  expect(lines[2]!, 'Glob(g-args) → g-body', 'third paired by id');
 });
 
 // --- runJudge: timeout-feeds-retry-loop (issue #12) ----------------------

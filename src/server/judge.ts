@@ -398,14 +398,19 @@ export function extractToolSummary(
   transcript: TranscriptFile,
   toolSummaryCap: number = JUDGE_TOOL_SUMMARY_CAP_CHARS,
 ): string[] {
+  // FIFO fallback is dangerous when the transcript has IDs: a single dropped or
+  // mismatched id silently rebinds one tool's result to another tool's args,
+  // fabricating evidence for the judge. Only allow FIFO when the transcript is
+  // entirely id-less (legacy shape). Otherwise emit an explicit unmatched-result
+  // line and leave the dangling tool_use to be reported at the end (issue H1).
+  const hasAnyId = transcript.events.some(
+    (e) => (e.t === 'toolUse' || e.t === 'toolResult') && typeof e.id === 'string' && e.id,
+  );
   const out: string[] = [];
   // Primary pairing: by tool_use_id. Real-claude and fake-claude both emit ids,
   // so this is the path that actually runs in production.
   const byId = new Map<string, PendingToolUse>();
-  // Fallback FIFO queue for legacy transcripts written before ids were threaded
-  // through the parser. Pairing oldest-unmatched is closer to truth than the
-  // previous "always pair with the most recent" strategy that mis-attributed
-  // results across parallel tool calls (issue #5).
+  // FIFO queue used only when the transcript has no IDs at all.
   const fifo: PendingToolUse[] = [];
 
   for (const e of transcript.events) {
@@ -420,9 +425,17 @@ export function extractToolSummary(
         byId.delete(e.id);
         const idx = fifo.indexOf(pair!);
         if (idx >= 0) fifo.splice(idx, 1);
-      } else if (fifo.length > 0) {
+      } else if (!hasAnyId && fifo.length > 0) {
         pair = fifo.shift();
         if (pair?.id) byId.delete(pair.id);
+      }
+      if (!pair && hasAnyId) {
+        // ID-bearing transcript with an unmatched result: surface the gap
+        // instead of silently FIFO-rebinding to an unrelated tool_use.
+        const idHint = e.id ? `id=${e.id}` : 'no id';
+        const res = truncate(e.resultSummary, toolSummaryCap);
+        out.push(`[unmatched tool_result for ${idHint}] → ${res}${e.isError ? ' [error]' : ''}`);
+        continue;
       }
       const tool = pair?.tool ?? e.tool;
       const args = pair?.argsSummary ?? '';
