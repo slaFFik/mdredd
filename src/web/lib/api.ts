@@ -13,11 +13,6 @@ export interface StateSnapshot {
       config: RunConfig;
       transcript: TranscriptFile | null;
       judge: JudgeFile | null;
-      // Per-model judge snapshots (M4). Keys are model families
-      // (`haiku`/`sonnet`/`opus`); empty for runs created before this field
-      // existed. The legacy `judge` above is the latest run regardless of
-      // family; this map preserves prior runs across models.
-      judgesByModel: Record<string, JudgeFile>;
       outputs: OutputFile[];
     }
   >;

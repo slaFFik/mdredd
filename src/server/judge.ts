@@ -133,14 +133,6 @@ export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): P
     };
   }
   await atomicWriteJson(join(input.runDir, 'judge.json'), file);
-  // Per-family snapshot for cross-model comparison (M4). Re-running the judge
-  // with a different model overwrites only the per-family file matching that
-  // model, leaving the other families' previous scores intact. judge.json is
-  // still written above as the "latest" pointer so older readers keep working.
-  const family = modelFamily(judgeModel);
-  if (family) {
-    await atomicWriteJson(join(input.runDir, `judge-${family}.json`), file);
-  }
   // Best-effort: a missing or malformed attempts file is observability data, not
   // control flow, so persistence failures must not mask the real judge result.
   if (attempts.length > 0) {

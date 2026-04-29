@@ -1,12 +1,7 @@
 import { join } from 'node:path';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { atomicWriteJson, ensureDir, isNotFound, pathExists, readJsonIfExists } from './fsUtil.js';
-import {
-  GITIGNORE_FILE,
-  JUDGE_MODEL_FAMILIES,
-  LOCK_FILE,
-  SESSION_FILE,
-} from '@shared/constants.js';
+import { GITIGNORE_FILE, LOCK_FILE, SESSION_FILE } from '@shared/constants.js';
 import {
   makeDefaultSession,
   type ColumnConfig,
@@ -28,14 +23,6 @@ export interface RunBundle {
   config: RunConfig;
   transcript: TranscriptFile | null; // may be absent for in-flight (preparing) at boot
   judge: JudgeFile | null;
-  // Per-model judge snapshots written alongside `judge.json` (M4). Keys are
-  // model families (`haiku`, `sonnet`, `opus`); values are the JudgeFile from
-  // the most recent judge run with that family. Re-judging with one family
-  // does not erase the others — the UI uses this for cross-model comparison.
-  // Optional + may be empty for runs created before the per-family files
-  // existed; the legacy `judge` field above always reflects the latest run
-  // regardless of which family produced it.
-  judgesByModel: Record<string, JudgeFile>;
   outputs: Array<{ path: string; bytes: number }>;
 }
 
@@ -120,13 +107,8 @@ export class SessionStore {
       transcript = await readPartialTranscript(runDir, config);
     }
     const judge = await readJsonIfExists<JudgeFile>(join(runDir, 'judge.json'));
-    const judgesByModel: Record<string, JudgeFile> = {};
-    for (const family of JUDGE_MODEL_FAMILIES) {
-      const f = await readJsonIfExists<JudgeFile>(join(runDir, `judge-${family}.json`));
-      if (f) judgesByModel[family] = f;
-    }
     const outputs = await this.listOutputs(join(runDir, 'outputs'));
-    return { config, transcript, judge, judgesByModel, outputs };
+    return { config, transcript, judge, outputs };
   }
 
   private async listOutputs(dir: string): Promise<Array<{ path: string; bytes: number }>> {

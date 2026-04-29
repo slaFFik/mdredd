@@ -561,25 +561,6 @@ body {
   font-size: 11px;
   color: var(--fg-dim);
 }
-.judge-card .judge-confidence {
-  display: inline-block;
-  margin-left: 6px;
-  width: 14px;
-  text-align: center;
-  font-size: 10px;
-  font-weight: 700;
-  border-radius: 2px;
-  cursor: help;
-}
-.judge-card .judge-confidence--high {
-  color: var(--ok, #4ade80);
-}
-.judge-card .judge-confidence--medium {
-  color: var(--warn, #facc15);
-}
-.judge-card .judge-confidence--low {
-  color: var(--err, #f87171);
-}
 .judge-card .judge-warning {
   display: inline-block;
   margin-left: 6px;

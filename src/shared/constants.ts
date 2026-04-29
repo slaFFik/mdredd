@@ -106,12 +106,6 @@ export const JUDGE_TIMEOUT_MS_DEFAULT = 120_000;
 // both shapes have to resolve.
 export type ModelFamily = 'opus' | 'sonnet' | 'haiku';
 
-// All judge model families that get their own per-model artifact under a run
-// directory (e.g. `judge-haiku.json`). Listed explicitly so loaders don't
-// need to scan the directory and so adding a new family is a single change
-// here.
-export const JUDGE_MODEL_FAMILIES: readonly ModelFamily[] = ['haiku', 'sonnet', 'opus'];
-
 export function modelFamily(model: string): ModelFamily | null {
   if (model === 'opus' || model.startsWith('claude-opus-')) return 'opus';
   if (model === 'sonnet' || model.startsWith('claude-sonnet-')) return 'sonnet';

@@ -2188,50 +2188,6 @@ scenario('M6: ungradeable criterion is skipped even when phrasing matches', asyn
   });
 });
 
-// --- runJudge: per-model judge history (M4) --------------------------------
-
-scenario('M4: runJudge writes both judge.json and judge-<family>.json', async () => {
-  await withTmpRunDir(async (runDir) => {
-    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
-    const input = { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-haiku-4-5' };
-    await runJudge(input, { spawnFn });
-    const latest = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
-    if (latest.judgeModel !== 'claude-haiku-4-5') {
-      throw new Error(`expected judge.json judgeModel=claude-haiku-4-5, got ${latest.judgeModel}`);
-    }
-    const perFamily = JSON.parse(readFileSync(join(runDir, 'judge-haiku.json'), 'utf8'));
-    if (perFamily.judgeModel !== 'claude-haiku-4-5') {
-      throw new Error(`expected judge-haiku.json to be the haiku snapshot`);
-    }
-  });
-});
-
-scenario('M4: re-judging with a different family preserves the prior family file', async () => {
-  await withTmpRunDir(async (runDir) => {
-    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
-    await runJudge(
-      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-haiku-4-5' },
-      { spawnFn },
-    );
-    await runJudge(
-      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-sonnet-4-6' },
-      { spawnFn },
-    );
-    const latest = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
-    if (latest.judgeModel !== 'claude-sonnet-4-6') {
-      throw new Error(`expected latest judge.json to be sonnet, got ${latest.judgeModel}`);
-    }
-    const haiku = JSON.parse(readFileSync(join(runDir, 'judge-haiku.json'), 'utf8'));
-    if (haiku.judgeModel !== 'claude-haiku-4-5') {
-      throw new Error(`expected judge-haiku.json to still hold the prior Haiku run`);
-    }
-    const sonnet = JSON.parse(readFileSync(join(runDir, 'judge-sonnet.json'), 'utf8'));
-    if (sonnet.judgeModel !== 'claude-sonnet-4-6') {
-      throw new Error(`expected judge-sonnet.json to hold the new Sonnet run`);
-    }
-  });
-});
-
 // --- runJudge: judge.attempts.json persistence (M2) -------------------------
 
 scenario('judge.attempts.json: single ok attempt records label/result/sections', async () => {
