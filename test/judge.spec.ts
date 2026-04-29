@@ -814,5 +814,237 @@ scenario('buildJudgePrompt: bytesCapMultiplier of 0.5 shrinks bounded sections',
   }
 });
 
+// --- calibration: harness constraints + scoring precedents (issue #28) ----
+
+scenario('calibration: HARNESS CONSTRAINTS section names the actual toolAllowlist', () => {
+  const allowlist = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ toolAllowlist: allowlist }),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'HARNESS CONSTRAINTS', 'has harness section');
+  expectIncludes(prompt, allowlist.join(', '), 'allowlist rendered verbatim');
+});
+
+scenario('calibration: read-only mode renders read-only constraint, not write', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'read-only' }),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'Mode is read-only', 'read-only marker');
+  expectNotIncludes(prompt, 'Mode is write', 'no write marker');
+});
+
+scenario('calibration: write mode renders write constraint, not read-only', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ mode: 'write' }),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'Mode is write', 'write marker');
+  expectNotIncludes(prompt, 'Mode is read-only', 'no read-only marker');
+});
+
+scenario('calibration: no Bash → "no Bash" warning rendered', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ toolAllowlist: ['Read', 'Grep'] }),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'NO Bash', 'flags missing Bash');
+});
+
+scenario('calibration: Bash present → no "no Bash" warning', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ toolAllowlist: ['Read', 'Bash'] }),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectNotIncludes(prompt, 'NO Bash', 'should not flag Bash when present');
+});
+
+scenario('calibration: SCORING PRECEDENTS instructs ungradeable, not low', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'SCORING PRECEDENTS', 'has precedents block');
+  expectIncludes(prompt, 'ungradeable', 'mentions ungradeable sentinel');
+  expectIncludes(prompt, 'NOT low', 'flags the not-low rule');
+});
+
+scenario('calibration: prompt mentions concrete truncation caps', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  // Both the per-tool stream caps and the judge-side cap must be visible so
+  // the judge knows the variant saw more than what's rendered.
+  expectMatches(prompt, /\d+ chars/, 'cap byte count appears');
+  expectIncludes(prompt, 'truncated', 'mentions truncation');
+});
+
+scenario('calibration: ungradeable rationale must start with "ungradeable:" literal', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  // Both pieces of guidance must be present so the model can't fall back to
+  // "X not Y because" phrasing when it has already flagged ungradeable=true.
+  expectIncludes(prompt, 'rationale MUST start with the literal token', 'imperative phrasing');
+  expectIncludes(prompt, 'reserved for gradeable bands', 'explicit prohibition on X-not-Y form');
+});
+
+scenario('calibration: worked example shows ungradeable rationale shape', () => {
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript([assistantMessage([textBlock('ok')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  expectIncludes(prompt, 'Worked examples', 'worked-example header present');
+  // The example should show the literal "ungradeable:" prefix the judge is
+  // expected to use when naming a harness limit.
+  expectMatches(prompt, /"ungradeable:/, 'example demonstrates ungradeable rationale shape');
+});
+
+// --- ungradeable schema round-trip ---------------------------------------
+
+scenario('runJudge: persists ungradeable field from model output to judge.json', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const ungradeableResult = JSON.stringify({
+      result: '',
+      structured_output: {
+        scores: { accuracy: 50, completeness: 75, adherence: 100, clarity: 100 },
+        scoreRationales: {
+          accuracy:
+            'ungradeable: tool result for changelog.tsx truncated at 1024-char STREAM cap; cannot verify breaking-change claim.',
+          completeness: '75 not 100 because some output past truncation marker not visible.',
+          adherence:
+            '100: variant body recommends LSP, but LSP not in toolAllowlist; using Read was correct fallback.',
+          clarity: '100: response is concise and well-structured.',
+        },
+        rationale:
+          'Variant gave a confident answer about a breaking change but the tool result was truncated by harness limits, making accuracy unverifiable.',
+        ungradeable: { accuracy: true },
+      },
+    });
+    const spawnFn: SpawnJudgeFn = async () => ungradeableResult;
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(`expected status=ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    if (result.ungradeable?.accuracy !== true) {
+      throw new Error(
+        `expected ungradeable.accuracy=true in JudgeFile, got ${JSON.stringify(result.ungradeable)}`,
+      );
+    }
+    const persisted = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8')) as {
+      ungradeable?: { accuracy?: boolean };
+    };
+    if (persisted.ungradeable?.accuracy !== true) {
+      throw new Error(
+        `judge.json missing ungradeable.accuracy=true: ${JSON.stringify(persisted.ungradeable)}`,
+      );
+    }
+  });
+});
+
+scenario(
+  'runJudge: omitting ungradeable from model output leaves judge.ungradeable undefined',
+  async () => {
+    await withTmpRunDir(async (runDir) => {
+      const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+      const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+      if (result.status !== 'ok') {
+        throw new Error(`expected status=ok, got ${result.status}`);
+      }
+      if (result.ungradeable !== undefined) {
+        throw new Error(
+          `expected ungradeable to be undefined when model omits it, got ${JSON.stringify(result.ungradeable)}`,
+        );
+      }
+    });
+  },
+);
+
+// --- regression: April-24 reference run shape ----------------------------
+// The motivating run (1777323451-variant-ff8120) hit two false positives:
+// (a) Accuracy 50 because the Read result was truncated at 1024 chars
+// (b) Adherence 75 because the variant didn't use LSP — but LSP wasn't in
+//     the toolAllowlist, so the variant had no way to follow that instruction.
+// PR1's calibration block must surface BOTH harness facts to the judge so
+// future runs of this shape can score correctly.
+
+scenario('regression: April-24-shape prompt surfaces truncation cap AND missing-LSP fact', () => {
+  // Tool-call summary line ends with `…` to mimic what the variant actually saw —
+  // the truncation marker that previously drove the 50/Accuracy false positive.
+  const truncatedRead =
+    '1\timport {\n2\t    RocketLaunchIcon,\n3\t    SparklesIcon,…'.padEnd(1000, 'x') + '…';
+  const events: NormalizedEvent[] = [
+    toolUse('Read', '{"file_path":"/.../changelog.tsx"}', 'tu-0'),
+    toolResult('Read', truncatedRead, { id: 'tu-0' }),
+    assistantMessage([
+      textBlock(
+        'Yes — one breaking change in the **April 24, 2026** entry: workspace-scoped URLs.',
+      ),
+    ]),
+    turn(1),
+  ];
+  const { prompt } = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({
+      // Reference run config: read-only, no Bash, no LSP.
+      mode: 'read-only',
+      prompt: 'were there any breaking changes logged in the changelog recently?',
+      toolAllowlist: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+    }),
+    transcript: makeTranscript(events),
+    variantContent: 'use LSP for navigation; prefer goToDefinition over Read.',
+    outputs: [],
+  });
+  // (a) Truncation must be flagged in calibration so Accuracy isn't penalized for it.
+  expectIncludes(prompt, 'truncated', 'truncation explained in calibration');
+  expectIncludes(prompt, 'past the marker', 'judge instructed not to penalize past marker');
+  // (b) Missing LSP must be flagged so Adherence isn't penalized for not using LSP.
+  expectIncludes(prompt, 'No LSP', 'flags missing LSP tools');
+  expectIncludes(prompt, 'fallback', 'instructs that fallback usage is correct adherence');
+  // (c) The actual transcript content (truncated tool result, final message) must
+  //     still appear in the prompt so the judge has context to score the gradeable parts.
+  expectIncludes(prompt, 'April 24, 2026', "variant's claim is preserved");
+});
+
 await runAllScenarios();
 console.log('\nAll judge scenarios passed.');

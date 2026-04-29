@@ -12,7 +12,7 @@ import {
   tokenMatches,
 } from './security.js';
 import { log } from './log.js';
-import { HEARTBEAT_INTERVAL_MS } from '@shared/constants.js';
+import { HEARTBEAT_INTERVAL_MS, JUDGE_MODEL_OPTIONS } from '@shared/constants.js';
 import { MAX_COLUMNS, makeBlankColumn, type ColumnConfig } from '@shared/schemas/session.js';
 import { EffortSchema, ModeSchema, type ColumnStatus } from '@shared/schemas/types.js';
 import { VariantTypeSchema } from '@shared/schemas/types.js';
@@ -111,6 +111,14 @@ export function createRouter(deps: RouteDeps) {
         const updated = await deps.session.mutate((s) => {
           if (body.mode !== undefined) s.mode = ModeSchema.parse(body.mode);
           if (body.judgeEnabled !== undefined) s.judgeEnabled = Boolean(body.judgeEnabled);
+          if (body.judgeModel !== undefined) {
+            const next = String(body.judgeModel);
+            const allowed = JUDGE_MODEL_OPTIONS.some((o) => o.id === next);
+            if (!allowed) {
+              throw new RunManagerError('judge-model-invalid', `unknown judge model: ${next}`, 400);
+            }
+            s.judgeModel = next;
+          }
           if (body.defaultModel !== undefined) s.defaultModel = String(body.defaultModel);
         });
         return json(res, 200, updated);
@@ -219,6 +227,7 @@ export function createRouter(deps: RouteDeps) {
 interface PatchSessionBody {
   mode?: string;
   judgeEnabled?: boolean;
+  judgeModel?: string;
   defaultModel?: string;
 }
 

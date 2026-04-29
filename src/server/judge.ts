@@ -13,6 +13,10 @@ import {
   JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES,
   JUDGE_OUTPUT_FILE_CAP_BYTES,
   JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
+  STREAM_TOOL_ARGS_CAP_CHARS,
+  STREAM_TOOL_RESULT_CAP_CHARS,
+  defaultEffortForModel,
+  effortLevelsForModel,
 } from '@shared/constants.js';
 import {
   JUDGE_MODEL_JSON_SCHEMA,
@@ -32,6 +36,9 @@ export interface JudgeInput {
   transcript: TranscriptFile;
   variantContent: string;
   outputs: OutputFile[];
+  // Concrete Haiku/Sonnet/Opus model ID for this judge run. Falls back to
+  // the JUDGE_MODEL constant when omitted so existing tests still work.
+  judgeModel?: string;
   // Pre-read file contents for write-mode runs. Production calls leave this
   // undefined; `invokeJudge` fills it from disk before building the prompt.
   // Tests can set it directly to bypass the filesystem.
@@ -73,16 +80,18 @@ export interface RunJudgeOptions {
 }
 
 export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): Promise<JudgeFile> {
+  const judgeModel = input.judgeModel ?? JUDGE_MODEL;
   try {
     const parsed = await invokeJudge(input, opts.spawnFn);
     const file: JudgeFile = {
       runFolder: input.runConfig.runFolder,
       createdAt: new Date().toISOString(),
-      judgeModel: JUDGE_MODEL,
+      judgeModel,
       status: 'ok',
       scores: parsed.scores,
       scoreRationales: parsed.scoreRationales,
       rationale: parsed.rationale,
+      ungradeable: parsed.ungradeable,
     };
     await atomicWriteJson(join(input.runDir, 'judge.json'), file);
     return file;
@@ -90,7 +99,7 @@ export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): P
     const file: JudgeFile = {
       runFolder: input.runConfig.runFolder,
       createdAt: new Date().toISOString(),
-      judgeModel: JUDGE_MODEL,
+      judgeModel,
       status: 'errored',
       error: (err as Error).message,
     };
@@ -99,36 +108,108 @@ export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): P
   }
 }
 
-const RUBRIC_DEFINITION = `
-Score each criterion using this 5-band anchor scale:
-  0   = criterion is not satisfied at all
-  25  = barely satisfied; major gaps
-  50  = partially satisfied; meaningful gaps a reviewer would flag
-  75  = largely satisfied; minor gaps at most
-  100 = fully satisfied with no observable gaps
+// Tool families the calibration block reasons about. Listing each family here
+// keeps the rendered "no Bash / no LSP" notes truthful when toolAllowlist
+// changes (e.g. a future mode adds Bash) instead of hardcoding assumptions.
+const TOOL_FAMILIES = {
+  bash: ['Bash'],
+  lsp: ['LSP', 'mcp__lsp'],
+} as const;
 
-Criteria:
-- Accuracy       — Are factual or technical claims correct? Score Accuracy conservatively:
-                    you do NOT have ground truth about the user's codebase. If you cannot verify
-                    correctness from the evidence in the transcript, score Accuracy ≤ 50 and
-                    explain the uncertainty in the rationale.
-- Completeness   — Does the response address all parts of the prompt?
-- Adherence      — Does the response follow the instructions in the variant's CLAUDE.md / skill / agent?
-- Clarity        — Is the response well-organized, concise, and easy to follow?
+function hasToolFamily(allowlist: readonly string[], family: keyof typeof TOOL_FAMILIES): boolean {
+  return allowlist.some((t) =>
+    TOOL_FAMILIES[family].some((m) => t === m || t.startsWith(`${m}__`)),
+  );
+}
 
-Output strictly a JSON object of the shape:
-  { "scores": { "accuracy": N, "completeness": N, "adherence": N, "clarity": N },
-    "scoreRationales": {
-      "accuracy":     "≤ 300 chars: why this band and not the band above or below",
-      "completeness": "≤ 300 chars: why this band and not the band above or below",
-      "adherence":    "≤ 300 chars: why this band and not the band above or below",
-      "clarity":      "≤ 300 chars: why this band and not the band above or below"
-    },
-    "rationale": "one paragraph, ≤ 600 characters, calling out what drove each score" }
-where each N is one of 0, 25, 50, 75, 100. Each scoreRationales entry must
-explicitly justify the chosen band against neighboring bands — e.g. "75 not 100
-because <gap>" or "50 not 75 because <gap>". Do not just restate the score.
-`.trim();
+// Built per-run from runConfig so harness limits the judge sees match the
+// limits the variant actually ran under. A static block would silently lie
+// when the harness shape changes.
+export function buildRubric(runConfig: RunConfig): string {
+  const allowlist = runConfig.toolAllowlist;
+  const allowlistText = allowlist.length === 0 ? '(none)' : allowlist.join(', ');
+  const hasBash = hasToolFamily(allowlist, 'bash');
+  const hasLSP = hasToolFamily(allowlist, 'lsp');
+  const isWrite = runConfig.mode === 'write';
+
+  const harnessLines: string[] = [];
+  harnessLines.push(`- Tool calls were restricted to: ${allowlistText}.`);
+  if (!hasBash) {
+    harnessLines.push(
+      `- The variant has NO Bash. It cannot run any shell command — no \`git log\`/\`git blame\`/\`git show\`, no \`npm\`, no \`grep\`/\`find\`/\`sed\`. Do not penalize for missing actions that would require Bash.`,
+    );
+  }
+  if (!hasLSP) {
+    harnessLines.push(
+      `- No LSP / code-intelligence tools are available. Symbol navigation, type lookups, and reference searches must be done with Read/Glob/Grep, even if the variant body recommends LSP.`,
+    );
+  }
+  harnessLines.push(
+    `- The sandbox \`.git/\` is empty by design. Date-of-change, blame, recent commits, and "what was in the previous version" are NOT verifiable from inside the run, even hypothetically.`,
+  );
+  harnessLines.push(
+    `- Tool args were truncated at ${STREAM_TOOL_ARGS_CAP_CHARS} chars and tool results at ${STREAM_TOOL_RESULT_CAP_CHARS} chars before reaching this prompt; the judge view is further capped at ${JUDGE_TOOL_SUMMARY_CAP_CHARS} chars per item. A trailing \`…\` or "[truncated]" marker means the variant saw more than you do. Do NOT penalize the variant for content past the marker.`,
+  );
+  if (isWrite) {
+    harnessLines.push(
+      `- Mode is write: the variant could Write/Edit only inside \`outputs/\`. The "Files the variant produced" section below shows the actual bytes written.`,
+    );
+  } else {
+    harnessLines.push(
+      `- Mode is read-only: the variant could not Write, Edit, or otherwise modify any file.`,
+    );
+  }
+
+  const precedents = [
+    `- A claim that cannot be verified BECAUSE OF a harness limit (truncation marker, missing tool, empty .git/) is **ungradeable**, NOT low. When ungradeable: (a) set \`ungradeable.<criterion>=true\`, AND (b) the rationale MUST start with the literal token \`ungradeable:\` followed by the specific harness limit (e.g. "ungradeable: tool result truncated at ${STREAM_TOOL_RESULT_CAP_CHARS} chars; final lines not visible"). Do NOT use the "X not Y because" form for ungradeable criteria — that form is reserved for gradeable bands.`,
+    `- A claim that cannot be verified BUT a tool was available and unused (e.g. variant could have called Grep but did not) IS a real Accuracy/Completeness gap. Score normally.`,
+    `- Do NOT penalize Adherence for instructions the harness disallowed (e.g. variant body says "use LSP" but LSP is not in the toolAllowlist, or "run the test suite" but Bash is unavailable). Using the available fallback is correct adherence.`,
+    `- Do NOT penalize Completeness for actions impossible in the current mode (e.g. file edits when mode=read-only).`,
+    `- A response that says "I cannot verify X from inside the sandbox" is CORRECT behavior, not a Completeness failure.`,
+    `- Conciseness is good. Do not penalize Clarity for short responses unless the prompt explicitly asked for detail.`,
+  ];
+
+  return [
+    `Score each criterion using this 5-band anchor scale:`,
+    `  0   = criterion is not satisfied at all`,
+    `  25  = barely satisfied; major gaps`,
+    `  50  = partially satisfied; meaningful gaps a reviewer would flag`,
+    `  75  = largely satisfied; minor gaps at most`,
+    `  100 = fully satisfied with no observable gaps`,
+    ``,
+    `Criteria:`,
+    `- Accuracy       — Are factual or technical claims correct? You do NOT have ground truth about the user's codebase. If you cannot verify correctness from the transcript AND the harness prevented the variant from gathering verification evidence, mark Accuracy ungradeable (see precedents below). Otherwise score normally.`,
+    `- Completeness   — Does the response address all parts of the prompt that were achievable given the harness?`,
+    `- Adherence      — Does the response follow the instructions in the variant's CLAUDE.md / skill / agent that were achievable given the harness?`,
+    `- Clarity        — Is the response well-organized, concise, and easy to follow?`,
+    ``,
+    `HARNESS CONSTRAINTS — what the variant could NOT do, regardless of skill:`,
+    ...harnessLines,
+    ``,
+    `SCORING PRECEDENTS:`,
+    ...precedents,
+    ``,
+    `Output strictly a JSON object of the shape:`,
+    `  { "scores": { "accuracy": N, "completeness": N, "adherence": N, "clarity": N },`,
+    `    "scoreRationales": {`,
+    `      "accuracy":     "≤ 300 chars: why this band; if ungradeable, name the harness limit",`,
+    `      "completeness": "≤ 300 chars: why this band and not the band above or below",`,
+    `      "adherence":    "≤ 300 chars: why this band and not the band above or below",`,
+    `      "clarity":      "≤ 300 chars: why this band and not the band above or below"`,
+    `    },`,
+    `    "rationale": "one paragraph, ≤ 600 characters, calling out what drove each score",`,
+    `    "ungradeable": { "accuracy"?: boolean, "completeness"?: boolean, "adherence"?: boolean, "clarity"?: boolean } }`,
+    `where each N is one of 0, 25, 50, 75, 100. Rationale form is criterion-state-dependent — pick exactly one:`,
+    `  - GRADEABLE → start with the band, e.g. "75 not 100 because <gap>" or "50 not 75 because <gap>". Justify the chosen band against neighbors.`,
+    `  - UNGRADEABLE → start with the literal token \`ungradeable:\` followed by the specific harness limit (truncation cap, missing tool, empty .git/). Do NOT use the "X not Y because" form here — it is reserved for gradeable bands. The score field still carries your best-effort band but the UI hides it.`,
+    `Omit \`ungradeable\` (or omit the criterion key) when the criterion is gradeable.`,
+    ``,
+    `Worked examples — copy this shape and content quality:`,
+    `- Accuracy, gradeable: "75 not 100 because the variant claims FooStore writes to disk, but the visible Read of FooStore.ts shows only an in-memory Map; no fs call appears in the transcript."`,
+    `- Accuracy, ungradeable: "ungradeable: tool result for changelog.tsx is truncated at the ${STREAM_TOOL_RESULT_CAP_CHARS}-char STREAM cap (\`…\` marker visible); the variant's claim that April 24 is the only breaking change cannot be verified without seeing the full file."`,
+    `- Adherence, gradeable: "100: variant body recommends LSP for navigation, but LSP is not in toolAllowlist (${allowlistText}); using Read was the correct fallback."`,
+  ].join('\n');
+}
 
 export interface JudgePromptArtifacts {
   prompt: string;
@@ -195,7 +276,7 @@ export function buildJudgePrompt(
       `If it appears anywhere in your response, the run is invalidated as poisoned.`,
   );
   lines.push('');
-  lines.push(RUBRIC_DEFINITION);
+  lines.push(buildRubric(runConfig));
   lines.push('');
 
   lines.push('## Prompt given to the variant');
@@ -512,10 +593,11 @@ async function attemptJudge(
   canary: string,
   runDir: string,
   label: string,
+  model: string,
 ): Promise<AttemptResult> {
   let raw: string;
   try {
-    raw = await spawnFn(claudeBin, prompt, { jsonSchema: true });
+    raw = await spawnFn(claudeBin, prompt, { jsonSchema: true, model });
   } catch (err) {
     if (err instanceof JudgeTimeoutError) {
       log.warn('judge.attempt-timeout', { attempt: label, error: err.message });
@@ -540,6 +622,7 @@ export async function invokeJudge(
   spawnFn: SpawnJudgeFn = spawnJudge,
 ): Promise<JudgeModelOutput> {
   const { claudeBin, runDir } = input;
+  const judgeModel = input.judgeModel ?? JUDGE_MODEL;
   // Pre-read output files once so the (possibly halved-cap) retry can re-trim
   // the same in-memory bytes instead of touching disk twice.
   const outputContents =
@@ -549,7 +632,15 @@ export async function invokeJudge(
   const enriched: JudgeInput = { ...input, outputContents };
   const built = buildJudgePrompt(enriched);
 
-  const first = await attemptJudge(spawnFn, claudeBin, built.prompt, built.canary, runDir, 'first');
+  const first = await attemptJudge(
+    spawnFn,
+    claudeBin,
+    built.prompt,
+    built.canary,
+    runDir,
+    'first',
+    judgeModel,
+  );
   if (first.ok) return first.value;
 
   // Build the retry prompt. A timeout is treated like a schema failure for retry
@@ -577,7 +668,15 @@ export async function invokeJudge(
     retryCanary = built.canary;
   }
 
-  const second = await attemptJudge(spawnFn, claudeBin, retryPrompt, retryCanary, runDir, 'retry');
+  const second = await attemptJudge(
+    spawnFn,
+    claudeBin,
+    retryPrompt,
+    retryCanary,
+    runDir,
+    'retry',
+    judgeModel,
+  );
   if (second.ok) return second.value;
 
   if (second.kind === 'timeout') {
@@ -603,6 +702,7 @@ async function writeRawResponse(runDir: string, label: string, raw: string): Pro
 
 export interface SpawnJudgeOptions {
   jsonSchema: boolean;
+  model: string;
 }
 
 function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions): Promise<string> {
@@ -611,7 +711,7 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
       '-p',
       prompt,
       '--model',
-      JUDGE_MODEL,
+      opts.model,
       '--output-format',
       'json',
       '--tools',
@@ -623,6 +723,14 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
       'user',
       '--disable-slash-commands',
     ];
+    // Judge runs at the model's default effort — SONNET_EFFORT_DEFAULT for
+    // Sonnet, OPUS_EFFORT_DEFAULT for Opus, omitted for Haiku (which has no
+    // effort menu). Mirrors the runner's belt-and-suspenders check so a
+    // hypothetical mismatch silently drops --effort instead of failing.
+    const effort = defaultEffortForModel(opts.model);
+    if (effort && effortLevelsForModel(opts.model).includes(effort)) {
+      args.push('--effort', effort);
+    }
     if (opts.jsonSchema) {
       args.push('--json-schema', JSON.stringify(JUDGE_MODEL_JSON_SCHEMA));
     }

@@ -26,6 +26,14 @@ export const PROJECT_MARKERS = [
 // when a new Haiku ships and rebaselining is acceptable.
 export const JUDGE_MODEL = 'claude-haiku-4-5';
 
+// Models offered to the user in the topbar judge popover. Same pinning rule
+// as JUDGE_MODEL: only concrete IDs, never aliases. Order = display order.
+export const JUDGE_MODEL_OPTIONS = [
+  { id: 'claude-haiku-4-5', label: 'Haiku' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet' },
+  { id: 'claude-opus-4-7', label: 'Opus' },
+] as const;
+
 // Model used to auto-generate run-folder slugs from variant content. Kept
 // separate from JUDGE_MODEL so the slug generator can move independently —
 // slugs are non-critical (they fall back gracefully) and don't anchor any
@@ -78,16 +86,30 @@ export const OPUS_EFFORT_DEFAULT: Effort = 'xhigh';
 export const SONNET_EFFORT_DEFAULT: Effort = 'high';
 export const HAIKU_EFFORT_DEFAULT: Effort | null = null;
 
+// Maps either a CLI alias (`opus`, `sonnet`, `haiku`) or a concrete pinned ID
+// (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) onto its
+// model family. Variant columns store aliases; the judge popover stores
+// concrete IDs (JUDGE_MODEL_OPTIONS) — both call effort helpers below, so
+// both shapes have to resolve.
+export function modelFamily(model: string): 'opus' | 'sonnet' | 'haiku' | null {
+  if (model === 'opus' || model.startsWith('claude-opus-')) return 'opus';
+  if (model === 'sonnet' || model.startsWith('claude-sonnet-')) return 'sonnet';
+  if (model === 'haiku' || model.startsWith('claude-haiku-')) return 'haiku';
+  return null;
+}
+
 export function effortLevelsForModel(model: string): readonly Effort[] {
-  if (model === 'opus') return OPUS_EFFORTS;
-  if (model === 'sonnet') return SONNET_EFFORTS;
-  if (model === 'haiku') return HAIKU_EFFORTS;
+  const family = modelFamily(model);
+  if (family === 'opus') return OPUS_EFFORTS;
+  if (family === 'sonnet') return SONNET_EFFORTS;
+  if (family === 'haiku') return HAIKU_EFFORTS;
   return [];
 }
 
 export function defaultEffortForModel(model: string): Effort | null {
-  if (model === 'opus') return OPUS_EFFORT_DEFAULT;
-  if (model === 'sonnet') return SONNET_EFFORT_DEFAULT;
-  if (model === 'haiku') return HAIKU_EFFORT_DEFAULT;
+  const family = modelFamily(model);
+  if (family === 'opus') return OPUS_EFFORT_DEFAULT;
+  if (family === 'sonnet') return SONNET_EFFORT_DEFAULT;
+  if (family === 'haiku') return HAIKU_EFFORT_DEFAULT;
   return null;
 }

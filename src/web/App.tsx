@@ -3,7 +3,7 @@ import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js'
 import type { ColumnConfig, SessionFile } from '@shared/schemas/session.js';
 import type { ColumnStatus } from '@shared/schemas/types.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
-import { JUDGE_MODEL } from '@shared/constants.js';
+import { JUDGE_MODEL, JUDGE_MODEL_OPTIONS } from '@shared/constants.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { LocalVariantsResponse } from '@shared/schemas/localVariants.js';
 import {
@@ -366,7 +366,7 @@ function applySse(state: AppState, event: ServerSseEvent): AppState {
       const synthetic: JudgeFile = {
         runFolder,
         createdAt: new Date().toISOString(),
-        judgeModel: JUDGE_MODEL,
+        judgeModel: state.session?.judgeModel ?? JUDGE_MODEL,
         status: 'errored',
         error: event.error,
       };
@@ -579,6 +579,15 @@ export function App(): JSX.Element {
     }
   }, [state.session]);
 
+  const onChangeJudgeModel = useCallback(async (judgeModel: string) => {
+    try {
+      const s = await patchSession({ judgeModel });
+      dispatch({ type: 'session-patched', payload: s });
+    } catch (err) {
+      dispatch({ type: 'error', message: (err as Error).message });
+    }
+  }, []);
+
   const onStartNewConfirm = useCallback(async () => {
     dispatch({ type: 'set-confirm-start-new', open: false });
     try {
@@ -608,11 +617,29 @@ export function App(): JSX.Element {
             Mode: {session.mode === 'write' ? 'Write' : 'Read-only'}
           </button>
         </Hint>
-        <Hint content="Toggle judge (applies to new runs; current runs keep their original setting)">
+        <div className="judge-chip-wrap">
           <button className="chip" aria-pressed={session.judgeEnabled} onClick={onToggleJudge}>
             Judge {session.judgeEnabled ? 'ON' : 'OFF'}
           </button>
-        </Hint>
+          <div className="judge-popover" role="group" aria-label="Judge settings">
+            <div className="judge-popover-row">
+              <span className="judge-popover-label">Model</span>
+              <select
+                value={session.judgeModel}
+                onChange={(e) => void onChangeJudgeModel(e.target.value)}
+              >
+                {JUDGE_MODEL_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="judge-popover-hint">
+              Applies to new judge runs; existing scores keep their original model.
+            </div>
+          </div>
+        </div>
         <span className="spacer" />
         <span style={{ color: 'var(--fg-dim)', fontFamily: 'var(--mono)', fontSize: 11 }}>
           {session.cwd}

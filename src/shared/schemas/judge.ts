@@ -27,11 +27,23 @@ export const ScoreRationalesSchema = z.object({
 });
 export type ScoreRationales = z.infer<typeof ScoreRationalesSchema>;
 
+// Per-criterion sentinel: when true, the UI treats the corresponding score as
+// N/A (rendered as an em-dash). Lets the judge say "harness limit prevented
+// verification" without forcing an arbitrary low band.
+export const UngradeableSchema = z.object({
+  accuracy: z.boolean().optional(),
+  completeness: z.boolean().optional(),
+  adherence: z.boolean().optional(),
+  clarity: z.boolean().optional(),
+});
+export type Ungradeable = z.infer<typeof UngradeableSchema>;
+
 // Shape the Haiku judge must emit as its primary output (enforced via --json-schema).
 export const JudgeModelOutputSchema = z.object({
   scores: JudgeScoresSchema,
   scoreRationales: ScoreRationalesSchema,
   rationale: z.string().min(1).max(600),
+  ungradeable: UngradeableSchema.optional(),
 });
 export type JudgeModelOutput = z.infer<typeof JudgeModelOutputSchema>;
 
@@ -46,6 +58,7 @@ export const JudgeFileSchema = z.object({
   scores: JudgeScoresSchema.optional(),
   scoreRationales: ScoreRationalesSchema.optional(),
   rationale: z.string().optional(),
+  ungradeable: UngradeableSchema.optional(),
 });
 export type JudgeFile = z.infer<typeof JudgeFileSchema>;
 
@@ -78,5 +91,15 @@ export const JUDGE_MODEL_JSON_SCHEMA = {
       },
     },
     rationale: { type: 'string', maxLength: 600, minLength: 1 },
+    ungradeable: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        accuracy: { type: 'boolean' },
+        completeness: { type: 'boolean' },
+        adherence: { type: 'boolean' },
+        clarity: { type: 'boolean' },
+      },
+    },
   },
 } as const;

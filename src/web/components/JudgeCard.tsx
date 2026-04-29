@@ -2,11 +2,20 @@ import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { JSX, ReactNode } from 'react';
 import { Hint } from './Hint.js';
 
-function ScoreRow(props: { label: string; score: number; rationale?: string }): JSX.Element {
+function ScoreRow(props: {
+  label: string;
+  score: number;
+  rationale?: string;
+  ungradeable?: boolean;
+}): JSX.Element {
+  const display = props.ungradeable ? '—' : props.score;
+  const title = props.ungradeable ? 'Ungradeable: harness limit prevented evaluation' : undefined;
   const row: ReactNode = (
     <tr>
       <td>{props.label}</td>
-      <td className="score">{props.score}</td>
+      <td className="score" title={title}>
+        {display}
+      </td>
     </tr>
   );
   if (!props.rationale) return row as JSX.Element;
@@ -46,15 +55,36 @@ export function JudgeCard(
     );
   const s = j.scores;
   const r = j.scoreRationales;
+  const u = j.ungradeable;
   return (
     <div className="judge-card">
-      <strong>Judge ({j.judgeModel})</strong>
+      <strong>Judge</strong>
       <table>
         <tbody>
-          <ScoreRow label="Accuracy" score={s.accuracy} rationale={r?.accuracy} />
-          <ScoreRow label="Completeness" score={s.completeness} rationale={r?.completeness} />
-          <ScoreRow label="Adherence" score={s.adherence} rationale={r?.adherence} />
-          <ScoreRow label="Clarity" score={s.clarity} rationale={r?.clarity} />
+          <ScoreRow
+            label="Accuracy"
+            score={s.accuracy}
+            rationale={r?.accuracy}
+            ungradeable={u?.accuracy}
+          />
+          <ScoreRow
+            label="Completeness"
+            score={s.completeness}
+            rationale={r?.completeness}
+            ungradeable={u?.completeness}
+          />
+          <ScoreRow
+            label="Adherence"
+            score={s.adherence}
+            rationale={r?.adherence}
+            ungradeable={u?.adherence}
+          />
+          <ScoreRow
+            label="Clarity"
+            score={s.clarity}
+            rationale={r?.clarity}
+            ungradeable={u?.clarity}
+          />
         </tbody>
       </table>
       {j.rationale && <div className="rationale">{j.rationale}</div>}

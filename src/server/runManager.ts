@@ -473,6 +473,7 @@ export class RunManager extends EventEmitter {
         transcript,
         variantContent,
         outputs,
+        judgeModel: this.opts.session.snapshot.judgeModel,
       });
       if (judgeFile.status === 'ok') {
         this.emitSse({

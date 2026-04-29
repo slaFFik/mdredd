@@ -85,6 +85,7 @@ export async function fsRead(
 export async function patchSession(body: {
   mode?: string;
   judgeEnabled?: boolean;
+  judgeModel?: string;
   defaultModel?: string;
 }): Promise<SessionFile> {
   return request<SessionFile>('/api/session', {

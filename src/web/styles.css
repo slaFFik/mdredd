@@ -158,6 +158,9 @@ body {
   background: var(--bg-elev-2);
   color: var(--fg);
   cursor: pointer;
+  /* position:relative so the seam-masking pseudo (.chip::after) can anchor
+     here when the judge popover opens. Cosmetic-only; no other chip uses it. */
+  position: relative;
 }
 .topbar .chip:disabled {
   opacity: 0.5;
@@ -166,6 +169,95 @@ body {
 .topbar .chip[aria-pressed='true'] {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Hover-revealed popover containing the judge model selector. CSS-only —
+   :hover and :focus-within (keyboard) both reveal it. The wrap is
+   position:relative so the popover anchors to the chip.
+
+   The popover sits flush against the chip (top:100%, margin-top:-1px to
+   merge the 1px borders) so moving the cursor down stays inside the wrap's
+   subtree the whole way — without that, even a 6px gap is enough dead air
+   for :hover to drop and the popover to close mid-traversal. */
+.judge-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.judge-popover {
+  position: absolute;
+  top: 100%;
+  margin-top: -1px;
+  left: 0;
+  min-width: 220px;
+  background: var(--bg-elev-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  /* Square the top-left corner so the popover visually fuses with the
+     chip's bottom edge; round the other three for a tab-on-card feel. */
+  border-radius: 0 6px 6px 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  /* Negative spread keeps the shadow from bleeding upward onto the chip,
+     which would visually disconnect the seam. Drop it straight down only. */
+  box-shadow: 0 8px 16px -8px rgba(0, 0, 0, 0.35);
+  z-index: 900;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.judge-chip-wrap:hover .judge-popover,
+.judge-chip-wrap:focus-within .judge-popover {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Track the chip's pressed state on the popover border so chip + popover
+   look like one continuous shape — accent ring when judge is ON, default
+   border when judge is OFF. */
+.judge-chip-wrap:has(.chip[aria-pressed='true']) .judge-popover {
+  border-color: var(--accent);
+}
+/* When the popover is open: square BOTH chip bottom corners and lift the
+   chip above the popover so the mask pseudo can hide the seam. */
+.judge-chip-wrap:hover .chip,
+.judge-chip-wrap:focus-within .chip {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  z-index: 950;
+}
+/* Mask the 1px seam line where the chip and popover meet. The pseudo sits
+   exactly on the chip's bottom border row (top:100%, height:1px) and spans
+   the chip's padding-box width — leaving the 1px corner pixels (where the
+   chip's left/right borders meet the bottom) untouched. Those corner
+   pixels are the same accent color as the popover's left border / top
+   border continuation, so they form one unbroken outline; covering them
+   would punch a 1px gap in that vertical line. With chip z-index:950 above
+   popover z-index:900, the pseudo hides both the chip's bottom border AND
+   the popover's top border between the corners — past the chip's right
+   edge the popover's top border stays visible. */
+.judge-chip-wrap:hover .chip::after,
+.judge-chip-wrap:focus-within .chip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--bg-elev-2);
+}
+.judge-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.judge-popover-label {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.judge-popover-hint {
+  margin-top: 6px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .columns {

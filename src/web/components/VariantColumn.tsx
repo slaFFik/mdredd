@@ -120,7 +120,7 @@ export function VariantColumn(props: {
       <div className="column-header">
         <input
           type="text"
-          placeholder="Variant name (optional — will be auto-generated)"
+          placeholder="Variant name (optional)"
           value={column.variantName}
           disabled={isLocked}
           onChange={(e) => void props.onPatchColumn(column.id, { variantName: e.target.value })}

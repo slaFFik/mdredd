@@ -20,6 +20,9 @@ export type ColumnConfig = z.infer<typeof ColumnConfigSchema>;
 export const SessionFileSchema = z.object({
   mode: ModeSchema,
   judgeEnabled: z.boolean(),
+  // Concrete model ID (not an alias) used by the Haiku-by-default judge subprocess.
+  // Optional+default keeps pre-existing session.json files (without this field) parsing cleanly.
+  judgeModel: ModelIdSchema.optional().default('claude-haiku-4-5'),
   defaultModel: ModelIdSchema,
   cwd: z.string(),
   columns: z.array(ColumnConfigSchema).min(1).max(3),
@@ -33,6 +36,7 @@ export function makeDefaultSession(cwd: string): SessionFile {
   return {
     mode: 'read-only',
     judgeEnabled: true,
+    judgeModel: 'claude-haiku-4-5',
     defaultModel,
     cwd,
     columns: [makeBlankColumn('col-1', defaultModel), makeBlankColumn('col-2', defaultModel)],
