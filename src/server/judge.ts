@@ -793,7 +793,8 @@ function tryParseJudgeOutput(
   const outer = outerParsed as { result?: unknown; structured_output?: unknown };
   if (outer?.structured_output && typeof outer.structured_output === 'object') {
     const fromStructured = JudgeModelOutputSchema.safeParse(outer.structured_output);
-    if (fromStructured.success) return { ok: true, value: fromStructured.data };
+    if (fromStructured.success)
+      return { ok: true, value: normalizeUngradeable(fromStructured.data) };
   }
   if (typeof outer?.result === 'string' && outer.result.trim() !== '') {
     const fromResult = extractAndValidate(outer.result);
@@ -801,7 +802,7 @@ function tryParseJudgeOutput(
   }
 
   const asEnvelope = JudgeModelOutputSchema.safeParse(outerParsed);
-  if (asEnvelope.success) return { ok: true, value: asEnvelope.data };
+  if (asEnvelope.success) return { ok: true, value: normalizeUngradeable(asEnvelope.data) };
 
   if (typeof outer?.result === 'string' && outer.result.trim() !== '') {
     return extractAndValidate(outer.result);
@@ -834,7 +835,7 @@ function extractAndValidate(
     if (parsed === PARSE_FAILED) continue;
     anyParsed = true;
     const validated = JudgeModelOutputSchema.safeParse(parsed);
-    if (validated.success) return { ok: true, value: validated.data };
+    if (validated.success) return { ok: true, value: normalizeUngradeable(validated.data) };
     lastIssues = validated.error.issues.map((i) => i.path.join('.') + ': ' + i.message).join('; ');
   }
   if (lastIssues) return { ok: false, error: lastIssues };
@@ -845,6 +846,30 @@ function extractAndValidate(
     ok: false,
     error: `no parseable JSON object found. preview: ${preview || '(empty response)'}`,
   };
+}
+
+// Cross-validate ungradeable flag and rationale prefix. The rubric instructs
+// the judge to (a) set ungradeable.<criterion>=true AND (b) start the matching
+// rationale with the literal `ungradeable:` token. The UI hides the score when
+// the flag is set, so a flag-missing/false rationale prefixed with the literal
+// would render the score with a mismatched "ungradeable: ..." explanation.
+// We trust the explicit flag when set (true is intentional) and only normalize
+// the omitted/false-with-prefix case by promoting the flag to true.
+function normalizeUngradeable(data: JudgeModelOutput): JudgeModelOutput {
+  const criteria = ['accuracy', 'completeness', 'adherence', 'clarity'] as const;
+  let normalized: Record<string, boolean> | null = null;
+  for (const k of criteria) {
+    const rationale = data.scoreRationales[k];
+    const hasPrefix = rationale.startsWith('ungradeable:');
+    const flag = data.ungradeable?.[k];
+    if (hasPrefix && !flag) {
+      log.debug('judge.ungradeable-normalized', { criterion: k, reason: 'prefix-without-flag' });
+      if (!normalized) normalized = { ...(data.ungradeable ?? {}) };
+      normalized[k] = true;
+    }
+  }
+  if (!normalized) return data;
+  return { ...data, ungradeable: normalized };
 }
 
 const PARSE_FAILED = Symbol('parse-failed');

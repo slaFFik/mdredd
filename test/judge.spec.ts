@@ -1046,5 +1046,123 @@ scenario('regression: April-24-shape prompt surfaces truncation cap AND missing-
   expectIncludes(prompt, 'April 24, 2026', "variant's claim is preserved");
 });
 
+// --- C1: cross-validate ungradeable flag and rationale prefix ----------
+
+function makeUngradeableResult(opts: {
+  flag: boolean | undefined;
+  rationale: string;
+  // The other three criteria are kept gradeable for these tests.
+}): string {
+  const flagBlock = opts.flag === undefined ? {} : { ungradeable: { accuracy: opts.flag } };
+  return JSON.stringify({
+    result: '',
+    structured_output: {
+      scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+      scoreRationales: {
+        accuracy: opts.rationale,
+        completeness: '75 not 100 because one minor gap.',
+        adherence: '75 not 100 because optional step skipped.',
+        clarity: '75 not 100 because one paragraph rambles.',
+      },
+      rationale: 'overall solid.',
+      ...flagBlock,
+    },
+  });
+}
+
+scenario('C1: flag=true + ungradeable: prefix → flag stays true (trusted)', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      makeUngradeableResult({
+        flag: true,
+        rationale: 'ungradeable: tool result truncated; cannot verify.',
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (result.ungradeable?.accuracy !== true) {
+      throw new Error(
+        `expected accuracy flag preserved as true; got ${JSON.stringify(result.ungradeable)}`,
+      );
+    }
+  });
+});
+
+scenario(
+  'C1: flag=true + non-prefix rationale → flag stays true (trusted, no demotion)',
+  async () => {
+    // The flag is the canonical signal. We never demote a true flag based on
+    // the rationale shape — the judge may have written a malformed rationale
+    // but their explicit ungradeable=true intent is preserved.
+    await withTmpRunDir(async (runDir) => {
+      const spawnFn: SpawnJudgeFn = async () =>
+        makeUngradeableResult({
+          flag: true,
+          rationale: '75 not 100 because some claims unverified.',
+        });
+      const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+      if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+      if (result.ungradeable?.accuracy !== true) {
+        throw new Error(
+          `expected accuracy flag preserved as true; got ${JSON.stringify(result.ungradeable)}`,
+        );
+      }
+    });
+  },
+);
+
+scenario('C1: flag missing + ungradeable: prefix → flag normalized to true', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      makeUngradeableResult({
+        flag: undefined,
+        rationale: 'ungradeable: tool result truncated; cannot verify.',
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (result.ungradeable?.accuracy !== true) {
+      throw new Error(
+        `expected accuracy flag normalized to true; got ${JSON.stringify(result.ungradeable)}`,
+      );
+    }
+  });
+});
+
+scenario('C1: flag=false + ungradeable: prefix → flag normalized to true', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      makeUngradeableResult({
+        flag: false,
+        rationale: 'ungradeable: tool result truncated; cannot verify.',
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (result.ungradeable?.accuracy !== true) {
+      throw new Error(
+        `expected accuracy flag normalized from false to true; got ${JSON.stringify(result.ungradeable)}`,
+      );
+    }
+  });
+});
+
+scenario(
+  'C1: flag=false + non-prefix rationale → no normalization (gradeable, leave alone)',
+  async () => {
+    await withTmpRunDir(async (runDir) => {
+      const spawnFn: SpawnJudgeFn = async () =>
+        makeUngradeableResult({
+          flag: false,
+          rationale: '75 not 100 because some claims unverified.',
+        });
+      const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+      if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+      if (result.ungradeable?.accuracy !== false) {
+        throw new Error(
+          `expected accuracy flag preserved as false; got ${JSON.stringify(result.ungradeable)}`,
+        );
+      }
+    });
+  },
+);
+
 await runAllScenarios();
 console.log('\nAll judge scenarios passed.');
