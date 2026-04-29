@@ -11,6 +11,15 @@ import { makeAuthContext } from './security.js';
 import { log } from './log.js';
 
 const DEFAULT_PREF_PORT = 6800;
+// Hardcoded against vite.config.ts (strictPort:true) so dev runs always use
+// the same port. If that constant moves, this one has to move with it.
+const VITE_DEV_PORT = 5173;
+// True when running through tsx watch (file URL is .ts), false when running
+// the compiled bundle (.js). The compiled bundle serves dist/web/, which is
+// self-contained; the source-mode server cannot serve src/web/index.html
+// without Vite's transform pipeline. So in dev we point the printed URL and
+// auto-open at Vite instead, where /api and /sse proxy back to mdredd.
+const isDev = import.meta.url.endsWith('.ts');
 
 async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -75,11 +84,16 @@ async function main(): Promise<void> {
       // lock (we just acquired it but never wrote the sidecar) and exit.
       writeLockMeta(preflight.lockFilePath, process.pid, port)
         .then(() => {
-          const url = `${auth.origin}/?t=${auth.token}`;
-          log.info('server.listening', { url, pid: process.pid });
-          console.log(`mdredd listening at ${url}`);
+          const apiUrl = `${auth.origin}/?t=${auth.token}`;
+          const devUrl = `http://127.0.0.1:${VITE_DEV_PORT}/?t=${auth.token}`;
+          const browserUrl = isDev ? devUrl : apiUrl;
+          log.info('server.listening', { url: apiUrl, pid: process.pid });
+          console.log(`mdredd listening at ${apiUrl}`);
+          if (isDev) {
+            console.log(`open in browser (Vite + HMR): ${devUrl}`);
+          }
           if (shouldOpen) {
-            open(url).catch((err) => {
+            open(browserUrl).catch((err) => {
               console.log(`(could not open browser automatically: ${err.message})`);
             });
           }
