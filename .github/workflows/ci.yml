@@ -92,6 +92,8 @@ jobs:
       - run: npm run test:judge
       - run: npm run test:runner
       - run: npm run test:sandbox
+      - run: npm run test:security
+      - run: npm run test:routes
 
   ci-success:
     name: CI Success

@@ -24,7 +24,7 @@ npm run lint          # eslint .
 npm run format        # prettier --write .
 npm run format:check  # prettier --check .
 
-npm test              # judge + preflight + runner + sandbox specs (in that order)
+npm test              # judge + preflight + runner + sandbox + security specs (in that order)
 npm run test:judge        # tsx test/judge.spec.ts
 npm run test:preflight    # tsx test/preflight.spec.ts
 npm run test:runner       # tsx test/runner.smoke.ts
@@ -45,7 +45,7 @@ Tests are plain tsx scripts, not a framework. Each file declares scenarios via a
 
 - `bin/mdredd.js` — published entry point. Refuses to run without `dist/`; tells users to `npm run build`.
 - `src/server/` — Node `http` server (no Express/Fastify). Owns preflight, sandboxing, child-process spawning, stream parsing, judge runs, SSE fan-out, and the static-asset fallback for the SPA.
-- `src/web/` — React 19 + Vite SPA. Communicates with the server over REST + an `EventSource` SSE stream. Token (`?t=`) is captured from the launch URL and attached to every request.
+- `src/web/` — React 19 + Vite SPA. Communicates with the server over REST + an `EventSource` SSE stream. Same-origin only — no token plumbing; the server enforces auth via the Host + Origin headers (see "Authentication" below).
 - `src/shared/` — Zod schemas (`schemas/`) and constants used by both. Imported as `@shared/*` (path alias).
 - `test/` — flat tsx scripts. `test/fake-claude.mjs` is the deterministic stand-in for `claude` used by the runner, preflight, and judge specs.
 - `agents/` — gitignored locally (see `.gitignore`); written by mdredd when run from this repo against itself. Don't commit anything from here.
@@ -73,7 +73,9 @@ Tests are plain tsx scripts, not a framework. Each file declares scenarios via a
 
 `src/web/App.tsx` owns the global reducer and the SSE subscription. The page boot fetches `/api/state` (a snapshot of `session.json` + every run bundle on disk) and reconciles it with live SSE events keyed by column id. `liveStateFromTranscript` projects a persisted normalized transcript onto the in-memory live-event shape so a mid-run page refresh still surfaces the prefix; the projection mirrors the SSE reducer's collapsing rules — keep them in sync if you change either.
 
-Authentication uses a `?t=<token>` URL parameter captured at boot and attached as both `x-mdredd-token` header and query string. The server verifies via `timingSafeEqual` and pins `Origin` on mutating methods.
+Authentication is same-origin only — no per-launch session token. Every `/api/*` and `/sse` request must arrive with `Host` matching `127.0.0.1:<port>` or `localhost:<port>` (blocks DNS rebinding) AND `Origin` matching the bound `http://127.0.0.1:<port>` (blocks cross-origin fetches). Static assets are unauthenticated so top-level navigations (no `Origin` header) can load the SPA. In dev mode, Vite's proxy rewrites `Origin` and `Host` so the server only ever sees its own values; if you change the Vite proxy config, keep `changeOrigin: true` + the explicit `Origin` header rewrite or the SPA will start getting 403s.
+
+In dev (`tsx watch`), the URL is stable across server restarts (no token to regenerate), so we only auto-open the browser on the **first** launch within a given `tsx watch` session. The `~/.mdredd/.dev-open-marker` file records the parent pid (the watcher); a launch with a matching parent pid skips `open()`. A fresh `npm run dev` invocation has a new parent pid → opens once → subsequent file-change restarts under the same watcher do not.
 
 ### React Compiler is on
 
