@@ -13,10 +13,14 @@ import {
   JUDGE_TOOL_SUMMARY_TOTAL_CAP_BYTES,
   JUDGE_OUTPUT_FILE_CAP_BYTES,
   JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
+  JUDGE_TIMEOUT_MS_BY_FAMILY,
+  JUDGE_TIMEOUT_MS_DEFAULT,
   STREAM_TOOL_ARGS_CAP_CHARS,
   STREAM_TOOL_RESULT_CAP_CHARS,
   defaultEffortForModel,
   effortLevelsForModel,
+  modelFamily,
+  type Effort,
 } from '@shared/constants.js';
 import {
   JUDGE_MODEL_JSON_SCHEMA,
@@ -65,7 +69,10 @@ export class JudgeTimeoutError extends Error {
   }
 }
 
-export const JUDGE_SUBPROCESS_TIMEOUT_MS = 120_000;
+// Legacy single-valued timeout retained for compatibility with imports outside
+// this module. The actual judge timeout is now resolved per call via
+// `timeoutForJudgeModel` (model-family aware).
+export const JUDGE_SUBPROCESS_TIMEOUT_MS = JUDGE_TIMEOUT_MS_DEFAULT;
 
 export type SpawnJudgeFn = (
   claudeBin: string,
@@ -594,10 +601,13 @@ async function attemptJudge(
   runDir: string,
   label: string,
   model: string,
+  effort?: Effort | null,
 ): Promise<AttemptResult> {
   let raw: string;
   try {
-    raw = await spawnFn(claudeBin, prompt, { jsonSchema: true, model });
+    const spawnOpts: SpawnJudgeOptions = { jsonSchema: true, model };
+    if (effort !== undefined) spawnOpts.effort = effort;
+    raw = await spawnFn(claudeBin, prompt, spawnOpts);
   } catch (err) {
     if (err instanceof JudgeTimeoutError) {
       log.warn('judge.attempt-timeout', { attempt: label, error: err.message });
@@ -615,6 +625,17 @@ async function attemptJudge(
   const parsed = tryParseJudgeOutput(raw);
   if (parsed.ok) return { ok: true, value: parsed.value };
   return { ok: false, kind: 'parse', error: parsed.error, code: parsed.code };
+}
+
+// Drop the model's current effort one notch toward "low". Returns null when the
+// model has no effort levels (e.g. Haiku) or when current is already the lowest.
+function lowerEffort(model: string, current: Effort | null): Effort | null {
+  if (!current) return null;
+  const levels = effortLevelsForModel(model);
+  if (levels.length === 0) return null;
+  const idx = levels.indexOf(current);
+  if (idx <= 0) return null;
+  return levels[idx - 1] ?? null;
 }
 
 export async function invokeJudge(
@@ -644,16 +665,25 @@ export async function invokeJudge(
   if (first.ok) return first.value;
 
   // Build the retry prompt. A timeout is treated like a schema failure for retry
-  // purposes (issue #12), but the retry shrinks the input to give Haiku a real
-  // chance to finish in the next 120s window. Schema-failure retries keep the
-  // original prompt and append a hint about the parse error.
+  // purposes (issue #12), but the retry shrinks the input AND drops one effort
+  // notch (e.g. opus xhigh → high) so the second attempt has a real chance to
+  // finish under the model-family timeout. Schema-failure retries keep the
+  // original prompt + effort and only append a hint about the parse error.
   let retryPrompt: string;
   let retryCanary: string;
+  let retryEffort: Effort | null | undefined;
   if (first.kind === 'timeout') {
+    const baseEffort = defaultEffortForModel(judgeModel);
+    const dropped = lowerEffort(judgeModel, baseEffort);
+    // For Haiku (no effort menu), `dropped` is null and `retryEffort` stays
+    // undefined → spawnJudge falls back to the model default (also null).
+    if (dropped !== null) retryEffort = dropped;
     log.warn('judge.first-attempt-invalid', {
       reason: 'timeout',
       error: first.error,
-      retryStrategy: 'halve-input-caps',
+      retryStrategy: dropped ? 'halve-input-caps + drop-effort' : 'halve-input-caps',
+      effortFrom: baseEffort,
+      effortTo: retryEffort ?? baseEffort,
     });
     const rebuilt = buildJudgePrompt(enriched, { bytesCapMultiplier: 0.5 });
     retryPrompt = rebuilt.prompt;
@@ -685,6 +715,7 @@ export async function invokeJudge(
     runDir,
     'retry',
     judgeModel,
+    retryEffort,
   );
   if (second.ok) return second.value;
 
@@ -712,6 +743,21 @@ async function writeRawResponse(runDir: string, label: string, raw: string): Pro
 export interface SpawnJudgeOptions {
   jsonSchema: boolean;
   model: string;
+  // Override the model's default effort. Used by the timeout-retry path to drop
+  // one notch (e.g. opus xhigh → high) so the second attempt has a real chance
+  // to finish under the model-family timeout. `null` explicitly disables --effort
+  // (e.g. for Haiku); `undefined` means "use the model's default".
+  effort?: Effort | null;
+}
+
+// Resolve the model-family timeout. Falls back to the legacy 120s when the model
+// string isn't recognized — keeps existing tests working.
+export function timeoutForJudgeModel(model: string): number {
+  const family = modelFamily(model);
+  if (family && JUDGE_TIMEOUT_MS_BY_FAMILY[family] !== undefined) {
+    return JUDGE_TIMEOUT_MS_BY_FAMILY[family];
+  }
+  return JUDGE_TIMEOUT_MS_DEFAULT;
 }
 
 function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions): Promise<string> {
@@ -732,11 +778,11 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
       'user',
       '--disable-slash-commands',
     ];
-    // Judge runs at the model's default effort — SONNET_EFFORT_DEFAULT for
-    // Sonnet, OPUS_EFFORT_DEFAULT for Opus, omitted for Haiku (which has no
-    // effort menu). Mirrors the runner's belt-and-suspenders check so a
-    // hypothetical mismatch silently drops --effort instead of failing.
-    const effort = defaultEffortForModel(opts.model);
+    // Judge runs at the model's default effort unless the caller overrode it
+    // (e.g. timeout-retry drops one notch). Mirrors the runner's belt-and-
+    // suspenders check so a hypothetical mismatch silently drops --effort
+    // instead of failing.
+    const effort = opts.effort === undefined ? defaultEffortForModel(opts.model) : opts.effort;
     if (effort && effortLevelsForModel(opts.model).includes(effort)) {
       args.push('--effort', effort);
     }
@@ -759,14 +805,13 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
     let stderr = '';
     proc.stdout.on('data', (d) => (stdout += d.toString()));
     proc.stderr.on('data', (d) => (stderr += d.toString()));
+    const timeoutMs = timeoutForJudgeModel(opts.model);
     const timer = setTimeout(() => {
       proc.kill('SIGKILL');
       reject(
-        new JudgeTimeoutError(
-          `judge subprocess timed out after ${Math.round(JUDGE_SUBPROCESS_TIMEOUT_MS / 1000)}s`,
-        ),
+        new JudgeTimeoutError(`judge subprocess timed out after ${Math.round(timeoutMs / 1000)}s`),
       );
-    }, JUDGE_SUBPROCESS_TIMEOUT_MS);
+    }, timeoutMs);
     proc.on('error', (err) => {
       clearTimeout(timer);
       reject(err);

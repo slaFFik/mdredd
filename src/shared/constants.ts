@@ -86,6 +86,19 @@ export const OPUS_EFFORT_DEFAULT: Effort = 'xhigh';
 export const SONNET_EFFORT_DEFAULT: Effort = 'high';
 export const HAIKU_EFFORT_DEFAULT: Effort | null = null;
 
+// Per-family judge subprocess timeout. Haiku is fast (90s is generous for
+// the prompt sizes we ship); Sonnet/Opus run slower at default effort and
+// can deterministically miss the 120s ceiling that used to be one-size-
+// fits-all. Opus xhigh on a 48 KiB prompt + 4 KiB output frequently
+// crosses 4 minutes.
+export const JUDGE_TIMEOUT_MS_BY_FAMILY: Record<'haiku' | 'sonnet' | 'opus', number> = {
+  haiku: 90_000,
+  sonnet: 180_000,
+  opus: 360_000,
+};
+
+export const JUDGE_TIMEOUT_MS_DEFAULT = 120_000;
+
 // Maps either a CLI alias (`opus`, `sonnet`, `haiku`) or a concrete pinned ID
 // (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) onto its
 // model family. Variant columns store aliases; the judge popover stores

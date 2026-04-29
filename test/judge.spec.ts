@@ -1242,5 +1242,96 @@ scenario('C2: schema-failure retry uses stable code, not Zod-rendered body fragm
   });
 });
 
+// --- C3: model-aware timeout + drop effort on retry ----------------------
+
+scenario('C3: timeoutForJudgeModel returns family-specific value', async () => {
+  const { timeoutForJudgeModel } = await import('../src/server/judge.js');
+  const { JUDGE_TIMEOUT_MS_BY_FAMILY, JUDGE_TIMEOUT_MS_DEFAULT } =
+    await import('@shared/constants.js');
+  if (timeoutForJudgeModel('claude-haiku-4-5') !== JUDGE_TIMEOUT_MS_BY_FAMILY.haiku) {
+    throw new Error('Haiku timeout should be the haiku family value');
+  }
+  if (timeoutForJudgeModel('claude-sonnet-4-6') !== JUDGE_TIMEOUT_MS_BY_FAMILY.sonnet) {
+    throw new Error('Sonnet timeout should be the sonnet family value');
+  }
+  if (timeoutForJudgeModel('claude-opus-4-7') !== JUDGE_TIMEOUT_MS_BY_FAMILY.opus) {
+    throw new Error('Opus timeout should be the opus family value');
+  }
+  if (
+    JUDGE_TIMEOUT_MS_BY_FAMILY.haiku >= JUDGE_TIMEOUT_MS_BY_FAMILY.sonnet ||
+    JUDGE_TIMEOUT_MS_BY_FAMILY.sonnet >= JUDGE_TIMEOUT_MS_BY_FAMILY.opus
+  ) {
+    throw new Error('expected haiku < sonnet < opus timeouts');
+  }
+  // Unknown model falls back to default.
+  if (timeoutForJudgeModel('unknown-model') !== JUDGE_TIMEOUT_MS_DEFAULT) {
+    throw new Error('unknown model should fall back to default timeout');
+  }
+});
+
+scenario('C3: timeout-retry path drops effort one notch (opus xhigh → high)', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const efforts: (string | undefined)[] = [];
+    const spawnFn: SpawnJudgeFn = async (_bin, _prompt, opts) => {
+      // First attempt: spawnFn called with default effort (omitted because
+      // the orchestrator passes `undefined` so spawnJudge resolves the
+      // default — but we read the explicit override here). Track whatever
+      // value the caller passed.
+      efforts.push(opts.effort === null ? 'null' : opts.effort);
+      if (efforts.length === 1) {
+        throw new JudgeTimeoutError('judge subprocess timed out after 360s');
+      }
+      return VALID_JUDGE_RESULT;
+    };
+    const result = await runJudge(
+      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-opus-4-7' },
+      { spawnFn },
+    );
+    if (result.status !== 'ok') {
+      throw new Error(`expected ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    if (efforts.length !== 2) {
+      throw new Error(`expected 2 spawn calls, got ${efforts.length}`);
+    }
+    // First attempt: orchestrator passes undefined (use model default).
+    if (efforts[0] !== undefined) {
+      throw new Error(
+        `first attempt should pass undefined effort (model default); got ${efforts[0]}`,
+      );
+    }
+    // Second attempt (retry): explicitly lowered effort. Opus default is
+    // 'xhigh', one notch lower in OPUS_EFFORTS is 'high'.
+    if (efforts[1] !== 'high') {
+      throw new Error(`retry effort should be 'high' (one notch below xhigh); got ${efforts[1]}`);
+    }
+  });
+});
+
+scenario('C3: timeout-retry on Haiku does not pass --effort (no effort menu)', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const efforts: (string | undefined)[] = [];
+    const spawnFn: SpawnJudgeFn = async (_bin, _prompt, opts) => {
+      efforts.push(opts.effort === null ? 'null' : opts.effort);
+      if (efforts.length === 1) {
+        throw new JudgeTimeoutError('judge subprocess timed out after 90s');
+      }
+      return VALID_JUDGE_RESULT;
+    };
+    const result = await runJudge(
+      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-haiku-4-5' },
+      { spawnFn },
+    );
+    if (result.status !== 'ok') {
+      throw new Error(`expected ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    // Both attempts should leave effort undefined (model default for Haiku is null).
+    if (efforts[0] !== undefined || efforts[1] !== undefined) {
+      throw new Error(
+        `Haiku should have no effort override on either attempt; got ${JSON.stringify(efforts)}`,
+      );
+    }
+  });
+});
+
 await runAllScenarios();
 console.log('\nAll judge scenarios passed.');
