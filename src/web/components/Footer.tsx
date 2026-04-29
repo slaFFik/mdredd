@@ -57,15 +57,15 @@ export function Footer(): JSX.Element {
   return (
     <footer className="footer">
       <div className="footer-links">
-        <Hint content="GitHub">
+        <Hint content="Review the code and contribute to the project">
           <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
             <GitHubIcon />
             <span>GitHub</span>
           </a>
         </Hint>
         <span className="footer-sep">·</span>
-        <Hint content="Slava Abakumov">
-          <a href="https://ovirium.com" target="_blank" rel="noopener noreferrer">
+        <Hint content="Check out the author's blog">
+          <a href="https://ovirium.com?ref=mdredd" target="_blank" rel="noopener noreferrer">
             Slava Abakumov
           </a>
         </Hint>
