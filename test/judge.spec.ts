@@ -778,7 +778,9 @@ scenario('buildJudgePrompt: tool-summary section is capped in aggregate', () => 
     variantContent: 'v',
     outputs: [],
   });
-  expectMatches(prompt, /\[\d+ earlier tool calls? omitted\]/, 'omitted marker present');
+  // M7 changed the marker from "earlier tool calls omitted" (head-only cap) to
+  // "tool calls omitted" (head+tail cap). Match the new shape.
+  expectMatches(prompt, /\[\d+ tool calls? omitted\]/, 'omitted marker present');
   // Bounded by section cap (+ all the other sections).
   const toolSectionStart = prompt.indexOf('## Tool calls (summary)');
   const filesSectionStart = prompt.indexOf('## Run metadata');
@@ -1424,6 +1426,43 @@ scenario('H2: midEllipsis with cap larger than marker keeps head + tail', () => 
   }
 });
 
+scenario('M3: midEllipsis does not split multibyte UTF-8 codepoints (CJK)', () => {
+  // 漢 is 0xE6 0xBC 0xA2 in UTF-8 (3 bytes). Repeating it gives a stream of
+  // 3-byte codepoints; any byte-aligned cap that is not a multiple of 3 would
+  // historically slice mid-codepoint and yield U+FFFD at the seam.
+  const big = '漢'.repeat(500); // 1500 bytes
+  for (const cap of [100, 101, 102, 200, 251, 599]) {
+    const out = midEllipsis(big, cap);
+    if (out.includes('�')) {
+      throw new Error(
+        `midEllipsis(cap=${cap}) introduced replacement char \\uFFFD at the truncation seam`,
+      );
+    }
+    if (Buffer.byteLength(out, 'utf8') > cap) {
+      throw new Error(
+        `midEllipsis(cap=${cap}) returned ${Buffer.byteLength(out, 'utf8')} bytes; expected ≤${cap}`,
+      );
+    }
+  }
+});
+
+scenario('M3: midEllipsis does not split emoji (4-byte codepoints)', () => {
+  // 🎉 is 0xF0 0x9F 0x8E 0x89 in UTF-8 (4 bytes). Mix with ASCII so cuts can
+  // land inside a 4-byte sequence in either head or tail.
+  const big = '🎉ABC'.repeat(200) + 'END'; // mostly emoji + ASCII
+  for (const cap of [80, 81, 82, 83, 200, 333]) {
+    const out = midEllipsis(big, cap);
+    if (out.includes('�')) {
+      throw new Error(`midEllipsis(cap=${cap}) introduced \\uFFFD on emoji input`);
+    }
+    if (Buffer.byteLength(out, 'utf8') > cap) {
+      throw new Error(
+        `midEllipsis(cap=${cap}) returned ${Buffer.byteLength(out, 'utf8')} bytes; expected ≤${cap}`,
+      );
+    }
+  }
+});
+
 scenario('H2: midEllipsis no-op when content already fits', () => {
   const small = 'small';
   if (midEllipsis(small, 1000) !== small) {
@@ -1665,6 +1704,607 @@ scenario('H6: canary leak detected on the RETRY attempt', async () => {
     }
     if (!result.error || !/canary/i.test(result.error)) {
       throw new Error(`expected error to mention canary, got ${result.error}`);
+    }
+  });
+});
+
+// --- runJudge: envelope usage + cost capture (M1) ---------------------------
+
+scenario('runJudge: captures usage + total_cost_usd from CLI envelope', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: '75 not 100 because some claims unverified.',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall solid.',
+        },
+        usage: {
+          input_tokens: 1234,
+          cache_read_input_tokens: 500,
+          cache_creation_input_tokens: 100,
+          output_tokens: 256,
+        },
+        total_cost_usd: 0.0042,
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(`expected status=ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    if (!result.tokenUsage) throw new Error('expected tokenUsage to be populated');
+    if (result.tokenUsage.inputTokens !== 1234) {
+      throw new Error(`expected inputTokens=1234, got ${result.tokenUsage.inputTokens}`);
+    }
+    if (result.tokenUsage.cacheReadTokens !== 500) {
+      throw new Error(`expected cacheReadTokens=500, got ${result.tokenUsage.cacheReadTokens}`);
+    }
+    if (result.tokenUsage.cacheCreationTokens !== 100) {
+      throw new Error(
+        `expected cacheCreationTokens=100, got ${result.tokenUsage.cacheCreationTokens}`,
+      );
+    }
+    if (result.tokenUsage.outputTokens !== 256) {
+      throw new Error(`expected outputTokens=256, got ${result.tokenUsage.outputTokens}`);
+    }
+    if (result.costUsd !== 0.0042) {
+      throw new Error(`expected costUsd=0.0042, got ${result.costUsd}`);
+    }
+    // Persisted JudgeFile must round-trip the same fields so the UI can read them.
+    const persisted = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
+    if (persisted.tokenUsage?.inputTokens !== 1234) {
+      throw new Error(
+        `persisted tokenUsage missing/wrong: ${JSON.stringify(persisted.tokenUsage)}`,
+      );
+    }
+    if (persisted.costUsd !== 0.0042) {
+      throw new Error(`persisted costUsd missing/wrong: ${JSON.stringify(persisted.costUsd)}`);
+    }
+  });
+});
+
+scenario('runJudge: envelope without usage leaves JudgeFile fields unset', async () => {
+  await withTmpRunDir(async (runDir) => {
+    // VALID_JUDGE_RESULT has no usage / total_cost_usd keys.
+    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') {
+      throw new Error(`expected status=ok, got ${result.status}: ${result.error ?? ''}`);
+    }
+    if (result.tokenUsage !== undefined) {
+      throw new Error(
+        `expected tokenUsage undefined when envelope omits it, got ${JSON.stringify(result.tokenUsage)}`,
+      );
+    }
+    if (result.costUsd !== undefined) {
+      throw new Error(`expected costUsd undefined when envelope omits it, got ${result.costUsd}`);
+    }
+  });
+});
+
+// --- M11: BOM + control-char sanitization ----------------------------------
+
+import { sanitizeUntrustedBytes } from '../src/server/judge.js';
+
+scenario('M11: sanitizeUntrustedBytes strips leading BOM', () => {
+  const out = sanitizeUntrustedBytes('﻿hello');
+  if (out !== 'hello') throw new Error(`expected "hello", got ${JSON.stringify(out)}`);
+});
+
+scenario('M11: sanitizeUntrustedBytes strips ASCII controls except \\t/\\n/\\r', () => {
+  // Mix preserved whitespace with controls that should be stripped.
+  const inp = 'a\x00b\x07c\tdef\nghi\r\x1Fjkl\x7Fend';
+  const out = sanitizeUntrustedBytes(inp);
+  if (out !== 'abc\tdef\nghi\rjklend') {
+    throw new Error(`unexpected sanitised output: ${JSON.stringify(out)}`);
+  }
+});
+
+scenario('M11: sanitizeUntrustedBytes preserves multibyte chars', () => {
+  // No control chars; only multibyte. Function must not corrupt them.
+  const inp = '日本語 with 🎉 and accents é';
+  const out = sanitizeUntrustedBytes(inp);
+  if (out !== inp) throw new Error(`multibyte input was changed: ${JSON.stringify(out)}`);
+});
+
+scenario('M11: prompt fence drops BOM/control chars from variant content', () => {
+  const variantContent = '﻿leading-bom\x00null-byte\x1Fcontrol\nkeep-newline';
+  const built = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig(),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent,
+    outputs: [],
+  });
+  if (built.prompt.includes('﻿')) {
+    throw new Error('expected BOM to be stripped from prompt');
+  }
+  if (built.prompt.includes('\x00')) {
+    throw new Error('expected NUL to be stripped from prompt');
+  }
+  if (built.prompt.includes('\x1F')) {
+    throw new Error('expected control 0x1F to be stripped from prompt');
+  }
+  if (!built.prompt.includes('keep-newline')) {
+    throw new Error('expected real content to survive sanitization');
+  }
+});
+
+// --- M10: cacheable static rubric prefix -----------------------------------
+
+scenario('M10: prompt prefix up to harness block is byte-identical across runs', () => {
+  // Two prompts built from different runConfigs should agree on every byte
+  // before the variable HARNESS CONSTRAINTS section. That stable prefix is the
+  // prerequisite for Anthropic's prompt cache to hit across runs in a session.
+  const a = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({
+      mode: 'read-only',
+      toolAllowlist: ['Read', 'Glob'],
+      prompt: 'do A',
+    }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'va',
+    outputs: [],
+  });
+  const b = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/y',
+    runConfig: makeRunConfig({
+      mode: 'write',
+      toolAllowlist: ['Read', 'Glob', 'Write', 'Edit', 'Bash'],
+      prompt: 'do B',
+    }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'vb',
+    outputs: [],
+  });
+  const marker = 'HARNESS CONSTRAINTS';
+  const aPrefix = a.prompt.slice(0, a.prompt.indexOf(marker));
+  const bPrefix = b.prompt.slice(0, b.prompt.indexOf(marker));
+  if (aPrefix !== bPrefix) {
+    // Diff first divergence for fast triage.
+    let i = 0;
+    while (i < aPrefix.length && i < bPrefix.length && aPrefix[i] === bPrefix[i]) i++;
+    throw new Error(
+      `prefix divergence at byte ${i}; a=${JSON.stringify(aPrefix.slice(Math.max(0, i - 20), i + 60))} ` +
+        `vs b=${JSON.stringify(bPrefix.slice(Math.max(0, i - 20), i + 60))}`,
+    );
+  }
+  // Sanity check: the prefix must include the rubric content, otherwise the
+  // cache prefix doesn't actually carry the heavy text we want cached.
+  if (!aPrefix.includes('5-band anchor scale')) {
+    throw new Error('cacheable prefix missing the rubric body');
+  }
+});
+
+scenario('M10: variant-specific bits live AFTER the cacheable prefix', () => {
+  const built = buildJudgePrompt({
+    claudeBin: '/bin/false',
+    runDir: '/tmp/x',
+    runConfig: makeRunConfig({ toolAllowlist: ['Read'], skillOrAgentName: 'my-skill' }),
+    transcript: makeTranscript([assistantMessage([textBlock('done')]), turn(1)]),
+    variantContent: 'v',
+    outputs: [],
+  });
+  const harnessIdx = built.prompt.indexOf('HARNESS CONSTRAINTS');
+  if (harnessIdx < 0) throw new Error('expected HARNESS CONSTRAINTS section');
+  // Canary text must come AFTER the static prefix (it carries the per-call
+  // canary token, which would invalidate caching if rendered earlier).
+  const canaryIdx = built.prompt.indexOf(built.canary);
+  if (canaryIdx <= harnessIdx) {
+    throw new Error(
+      `canary token must appear AFTER harness; got canaryIdx=${canaryIdx} harnessIdx=${harnessIdx}`,
+    );
+  }
+});
+
+// --- M7: tool-summary head + tail ------------------------------------------
+
+import { capLinesHeadAndTail } from '../src/server/judge.js';
+
+scenario('M7: head+tail keeps both first and last tool calls', () => {
+  const lines = Array.from({ length: 20 }, (_, i) => `Tool${i}(arg=v${i}) → result-${i}`);
+  // Cap that fits roughly half the lines plus the marker.
+  const cap = 200;
+  const out = capLinesHeadAndTail(lines, cap);
+  if (Buffer.byteLength(out, 'utf8') > cap) {
+    throw new Error(`output ${Buffer.byteLength(out, 'utf8')} bytes > cap ${cap}`);
+  }
+  if (!out.includes('Tool0(')) {
+    throw new Error(`expected first tool call to survive; got ${out}`);
+  }
+  if (!out.includes('Tool19(')) {
+    throw new Error(`expected last tool call to survive; got ${out}`);
+  }
+  if (!/\[\d+ tool calls? omitted\]/.test(out)) {
+    throw new Error(`expected omission marker; got ${out}`);
+  }
+});
+
+scenario('M7: short list under cap returns unchanged', () => {
+  const lines = ['Read(a) → ok', 'Read(b) → ok'];
+  const out = capLinesHeadAndTail(lines, 1024);
+  if (out !== lines.join('\n')) throw new Error('expected pass-through under cap');
+});
+
+scenario('M7: marker is grammatical for omitted count of 1', () => {
+  // Asymmetric lines: one fat middle line forces it to be the dropped one
+  // even when the cap admits all the short lines plus the marker.
+  const lines = ['short1', 'short2', 'X'.repeat(100), 'short3', 'short4'];
+  // joined ≈ 128 bytes. With cap=80, the loop's largest fit is head=2/tail=2
+  // (omitting the single fat line), yielding singular grammar.
+  const out = capLinesHeadAndTail(lines, 80);
+  if (!out.includes('1 tool call omitted')) {
+    throw new Error(`expected singular grammar; got ${out}`);
+  }
+});
+
+// --- runJudge: self-consistency warnings (M6) ------------------------------
+
+scenario('M6: score=100 with rationale "did not address" → warning', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 100, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: '100 because the variant did not address the malformed-input case',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall solid.',
+        },
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (!result.warnings || result.warnings.length !== 1) {
+      throw new Error(`expected 1 warning, got ${JSON.stringify(result.warnings)}`);
+    }
+    const w = result.warnings[0]!;
+    if (w.criterion !== 'accuracy') throw new Error(`expected accuracy, got ${w.criterion}`);
+    if (w.kind !== 'high-score-with-gap') throw new Error(`expected high-score-with-gap kind`);
+  });
+});
+
+scenario('M6: rubric-form rationale "75 not 100 because did not X" is NOT flagged', async () => {
+  // The rubric prescribes "<band> not <neighbor> because <gap>" for gradeable
+  // scores, so the gap text appears in EVERY rationale. We must not flag it
+  // unless the score is the perfect 100.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'ok') throw new Error(`expected ok, got ${result.status}`);
+    if (result.warnings && result.warnings.length > 0) {
+      throw new Error(
+        `expected no warnings on standard rubric-form rationales, got ${JSON.stringify(result.warnings)}`,
+      );
+    }
+  });
+});
+
+scenario('M6: score=0 with rationale praising response → warning', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 0, clarity: 75 },
+          scoreRationales: {
+            accuracy: '75 not 100 because some claims unverified.',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '0 because the variant successfully followed every instruction',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'mixed.',
+        },
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (!result.warnings || result.warnings.length !== 1) {
+      throw new Error(`expected 1 warning, got ${JSON.stringify(result.warnings)}`);
+    }
+    if (result.warnings[0]!.kind !== 'low-score-with-praise') {
+      throw new Error(`expected low-score-with-praise, got ${result.warnings[0]!.kind}`);
+    }
+  });
+});
+
+scenario('M6: negation guard suppresses "nothing was missing" in score=100 rationale', async () => {
+  // Codex reviewer flagged the false-positive surface: substring-only matching
+  // would flag a 100-band rationale that praises completeness via a negated
+  // gap phrase. The negation guard scans the clause prefix for negator words
+  // and skips matches that come after one.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 100, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: '100 because the variant addressed every concern; nothing was missing',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall solid.',
+        },
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.warnings && result.warnings.length > 0) {
+      throw new Error(
+        `expected NO warnings on negated phrasing, got ${JSON.stringify(result.warnings)}`,
+      );
+    }
+  });
+});
+
+scenario(
+  'M6: negation guard suppresses "no requests failed to" in score=100 rationale',
+  async () => {
+    await withTmpRunDir(async (runDir) => {
+      const spawnFn: SpawnJudgeFn = async () =>
+        JSON.stringify({
+          result: '',
+          structured_output: {
+            scores: { accuracy: 100, completeness: 75, adherence: 75, clarity: 75 },
+            scoreRationales: {
+              accuracy: '100 because no requests failed to be handled correctly',
+              completeness: '75 not 100 because one minor gap.',
+              adherence: '75 not 100 because optional step skipped.',
+              clarity: '75 not 100 because one paragraph rambles.',
+            },
+            rationale: 'overall solid.',
+          },
+        });
+      const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+      if (result.warnings && result.warnings.length > 0) {
+        throw new Error(
+          `expected NO warnings when "failed to" is preceded by "no", got ${JSON.stringify(result.warnings)}`,
+        );
+      }
+    });
+  },
+);
+
+scenario('M6: negation in a different clause still allows the warning to fire', async () => {
+  // Negators in EARLIER clauses should not silence a phrase in a later one,
+  // because clause boundaries reset the polarity context.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 100, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: 'no issues with structure; the variant did not address timezones',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall.',
+        },
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (!result.warnings || result.warnings.length !== 1) {
+      throw new Error(
+        `expected 1 warning (gap in 2nd clause), got ${JSON.stringify(result.warnings)}`,
+      );
+    }
+    if (result.warnings[0]!.kind !== 'high-score-with-gap') {
+      throw new Error(`expected high-score-with-gap, got ${result.warnings[0]!.kind}`);
+    }
+  });
+});
+
+scenario('M6: ungradeable criterion is skipped even when phrasing matches', async () => {
+  // An ungradeable rationale starts with "ungradeable: <reason>"; the heuristic
+  // must skip it because (a) the score is hidden in the UI and (b) the prefix
+  // shape is different.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () =>
+      JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 100, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: 'ungradeable: tool result truncated; missing data prevents verification',
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'overall.',
+          ungradeable: { accuracy: true },
+        },
+      });
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.warnings && result.warnings.length > 0) {
+      throw new Error(
+        `expected no warnings (ungradeable should be skipped), got ${JSON.stringify(result.warnings)}`,
+      );
+    }
+  });
+});
+
+// --- runJudge: per-model judge history (M4) --------------------------------
+
+scenario('M4: runJudge writes both judge.json and judge-<family>.json', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+    const input = { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-haiku-4-5' };
+    await runJudge(input, { spawnFn });
+    const latest = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
+    if (latest.judgeModel !== 'claude-haiku-4-5') {
+      throw new Error(`expected judge.json judgeModel=claude-haiku-4-5, got ${latest.judgeModel}`);
+    }
+    const perFamily = JSON.parse(readFileSync(join(runDir, 'judge-haiku.json'), 'utf8'));
+    if (perFamily.judgeModel !== 'claude-haiku-4-5') {
+      throw new Error(`expected judge-haiku.json to be the haiku snapshot`);
+    }
+  });
+});
+
+scenario('M4: re-judging with a different family preserves the prior family file', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+    await runJudge(
+      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-haiku-4-5' },
+      { spawnFn },
+    );
+    await runJudge(
+      { ...makeJudgeInputForTmp(runDir), judgeModel: 'claude-sonnet-4-6' },
+      { spawnFn },
+    );
+    const latest = JSON.parse(readFileSync(join(runDir, 'judge.json'), 'utf8'));
+    if (latest.judgeModel !== 'claude-sonnet-4-6') {
+      throw new Error(`expected latest judge.json to be sonnet, got ${latest.judgeModel}`);
+    }
+    const haiku = JSON.parse(readFileSync(join(runDir, 'judge-haiku.json'), 'utf8'));
+    if (haiku.judgeModel !== 'claude-haiku-4-5') {
+      throw new Error(`expected judge-haiku.json to still hold the prior Haiku run`);
+    }
+    const sonnet = JSON.parse(readFileSync(join(runDir, 'judge-sonnet.json'), 'utf8'));
+    if (sonnet.judgeModel !== 'claude-sonnet-4-6') {
+      throw new Error(`expected judge-sonnet.json to hold the new Sonnet run`);
+    }
+  });
+});
+
+// --- runJudge: judge.attempts.json persistence (M2) -------------------------
+
+scenario('judge.attempts.json: single ok attempt records label/result/sections', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () => VALID_JUDGE_RESULT;
+    await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    const attemptsRaw = readFileSync(join(runDir, 'judge.attempts.json'), 'utf8');
+    const attemptsFile = JSON.parse(attemptsRaw);
+    if (!Array.isArray(attemptsFile.attempts) || attemptsFile.attempts.length !== 1) {
+      throw new Error(`expected exactly 1 attempt, got ${JSON.stringify(attemptsFile)}`);
+    }
+    const a = attemptsFile.attempts[0];
+    if (a.label !== 'first') throw new Error(`expected label=first, got ${a.label}`);
+    if (a.result !== 'ok') throw new Error(`expected result=ok, got ${a.result}`);
+    if (a.retryReason !== null) {
+      throw new Error(`expected retryReason=null on first, got ${a.retryReason}`);
+    }
+    if (a.capMultiplier !== 1) {
+      throw new Error(`expected capMultiplier=1 on first, got ${a.capMultiplier}`);
+    }
+    if (typeof a.canaryHashSha256 !== 'string' || a.canaryHashSha256.length !== 64) {
+      throw new Error(`expected sha256-hex canary hash, got ${a.canaryHashSha256}`);
+    }
+    if (a.canaryHashSha256.includes('MDREDD-CANARY')) {
+      throw new Error('canary hash must not contain raw canary string');
+    }
+    if (typeof a.promptTotalBytes !== 'number' || a.promptTotalBytes <= 0) {
+      throw new Error(`expected positive promptTotalBytes, got ${a.promptTotalBytes}`);
+    }
+    if (typeof a.sectionBytes?.variantBody !== 'number' || a.sectionBytes.variantBody <= 0) {
+      throw new Error(
+        `expected sectionBytes.variantBody>0 from non-empty variant, got ${JSON.stringify(a.sectionBytes)}`,
+      );
+    }
+  });
+});
+
+scenario('judge.attempts.json: timeout retry records both attempts', async () => {
+  await withTmpRunDir(async (runDir) => {
+    let calls = 0;
+    const spawnFn: SpawnJudgeFn = async () => {
+      calls++;
+      if (calls === 1) throw new JudgeTimeoutError('judge subprocess timed out after 120s');
+      return VALID_JUDGE_RESULT;
+    };
+    await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    const attemptsFile = JSON.parse(readFileSync(join(runDir, 'judge.attempts.json'), 'utf8'));
+    if (attemptsFile.attempts.length !== 2) {
+      throw new Error(`expected 2 attempts, got ${attemptsFile.attempts.length}`);
+    }
+    const [first, retry] = attemptsFile.attempts;
+    if (first.result !== 'timeout') {
+      throw new Error(`expected first.result=timeout, got ${first.result}`);
+    }
+    if (retry.label !== 'retry' || retry.result !== 'ok') {
+      throw new Error(`expected retry.label=retry result=ok, got ${JSON.stringify(retry)}`);
+    }
+    if (retry.retryReason !== 'timeout') {
+      throw new Error(`expected retry.retryReason=timeout, got ${retry.retryReason}`);
+    }
+    if (retry.capMultiplier !== 0.5) {
+      throw new Error(`expected retry.capMultiplier=0.5, got ${retry.capMultiplier}`);
+    }
+    if (!(retry.sectionBytes.variantBody < first.sectionBytes.variantBody)) {
+      throw new Error(
+        `retry sectionBytes should be smaller (halved cap); first=${first.sectionBytes.variantBody} retry=${retry.sectionBytes.variantBody}`,
+      );
+    }
+  });
+});
+
+scenario('judge.attempts.json: spawn ENOENT records result=spawn_error', async () => {
+  // Codex review found the gap: previously, any non-timeout spawn failure
+  // re-threw before recordAttempt, leaving judge.attempts.json empty even
+  // though the JudgeFile.error captured the failure.
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async () => {
+      const err = new Error('spawn ENOENT');
+      (err as Error & { code?: string }).code = 'ENOENT';
+      throw err;
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'errored') {
+      throw new Error(`expected errored on spawn failure, got ${result.status}`);
+    }
+    const attemptsFile = JSON.parse(readFileSync(join(runDir, 'judge.attempts.json'), 'utf8'));
+    if (attemptsFile.attempts.length !== 1) {
+      throw new Error(`expected 1 attempt, got ${attemptsFile.attempts.length}`);
+    }
+    if (attemptsFile.attempts[0].result !== 'spawn_error') {
+      throw new Error(
+        `expected result=spawn_error, got ${attemptsFile.attempts[0].result}; full=${JSON.stringify(attemptsFile)}`,
+      );
+    }
+  });
+});
+
+scenario('judge.attempts.json: canary leak records result=canary_leak', async () => {
+  await withTmpRunDir(async (runDir) => {
+    const spawnFn: SpawnJudgeFn = async (_bin, prompt) => {
+      const canary = prompt.match(/MDREDD-CANARY-[0-9a-f]{16}/)?.[0] ?? 'MDREDD-CANARY-DEAD';
+      return JSON.stringify({
+        result: '',
+        structured_output: {
+          scores: { accuracy: 75, completeness: 75, adherence: 75, clarity: 75 },
+          scoreRationales: {
+            accuracy: `75 not 100 with leak ${canary}`,
+            completeness: '75 not 100 because one minor gap.',
+            adherence: '75 not 100 because optional step skipped.',
+            clarity: '75 not 100 because one paragraph rambles.',
+          },
+          rationale: 'leak.',
+        },
+      });
+    };
+    const result = await runJudge(makeJudgeInputForTmp(runDir), { spawnFn });
+    if (result.status !== 'errored') {
+      throw new Error(`expected errored on canary leak, got ${result.status}`);
+    }
+    const attemptsFile = JSON.parse(readFileSync(join(runDir, 'judge.attempts.json'), 'utf8'));
+    if (attemptsFile.attempts.length !== 1) {
+      throw new Error(`expected 1 attempt, got ${attemptsFile.attempts.length}`);
+    }
+    if (attemptsFile.attempts[0].result !== 'canary_leak') {
+      throw new Error(
+        `expected result=canary_leak, got ${attemptsFile.attempts[0].result}; full=${JSON.stringify(attemptsFile)}`,
+      );
     }
   });
 });

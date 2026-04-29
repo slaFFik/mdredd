@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TokenUsageSchema } from './run.js';
 
 export const RUBRIC_BANDS = [0, 25, 50, 75, 100] as const;
 export type RubricBand = (typeof RUBRIC_BANDS)[number];
@@ -42,13 +43,33 @@ export type Ungradeable = z.infer<typeof UngradeableSchema>;
 export const JudgeModelOutputSchema = z.object({
   scores: JudgeScoresSchema,
   scoreRationales: ScoreRationalesSchema,
-  rationale: z.string().min(1).max(600),
+  // 1200 chars (M8): the prior 600 cap routinely truncated the umbrella when
+  // 2-3 criteria were ungradeable and the rationale carried most of the
+  // explanation. Doubling gives breathing room without bloating the prompt.
+  rationale: z.string().min(1).max(1200),
   ungradeable: UngradeableSchema.optional(),
 });
 export type JudgeModelOutput = z.infer<typeof JudgeModelOutputSchema>;
 
+// Self-consistency warning (M6). Surfaced when the judge emits a perfect score
+// alongside rationale text that describes a real gap, or a near-zero score
+// alongside praise. The wider per-criterion bands ("75 not 100 because did not
+// X") are deliberately NOT flagged: that's exactly the rubric's prescribed
+// shape, where the gap explains the chosen band. We only flag the extremes.
+export const JudgeWarningKindSchema = z.enum(['high-score-with-gap', 'low-score-with-praise']);
+export type JudgeWarningKind = z.infer<typeof JudgeWarningKindSchema>;
+
+export const JudgeWarningSchema = z.object({
+  criterion: z.enum(['accuracy', 'completeness', 'adherence', 'clarity']),
+  kind: JudgeWarningKindSchema,
+  message: z.string().min(1).max(200),
+});
+export type JudgeWarning = z.infer<typeof JudgeWarningSchema>;
+
 // The wrapper we persist to disk. Includes status + metadata around the model's raw scorecard.
 // scoreRationales is optional so judge.json files written before the field existed still load.
+// tokenUsage / costUsd are optional + nullable so older judge.json files (written before the
+// envelope was parsed for usage) still load.
 export const JudgeFileSchema = z.object({
   runFolder: z.string(),
   createdAt: z.string(),
@@ -59,8 +80,64 @@ export const JudgeFileSchema = z.object({
   scoreRationales: ScoreRationalesSchema.optional(),
   rationale: z.string().optional(),
   ungradeable: UngradeableSchema.optional(),
+  tokenUsage: TokenUsageSchema.nullable().optional(),
+  costUsd: z.number().nullable().optional(),
+  warnings: z.array(JudgeWarningSchema).optional(),
 });
 export type JudgeFile = z.infer<typeof JudgeFileSchema>;
+
+// Per-attempt observability record. Persisted to `judge.attempts.json` next to
+// `judge.json` so a bad score can be debugged after the fact without re-running.
+// Captures *what was sent* (prompt bytes per section, caps, model+effort) and
+// *what came back* (result kind), but never the raw response — the canary value
+// is hashed to stay greppable across logs without leaking the secret itself.
+// Possible per-attempt outcomes. `spawn_error` covers failures BEFORE the
+// model produced output — ENOENT on the binary, non-zero exit, IO errors —
+// so the attempts file still records that an attempt was started even when
+// the subprocess never reached the parsing stage.
+export const JudgeAttemptResultSchema = z.enum([
+  'ok',
+  'parse_failure',
+  'timeout',
+  'canary_leak',
+  'spawn_error',
+]);
+export type JudgeAttemptResultKind = z.infer<typeof JudgeAttemptResultSchema>;
+
+export const JudgeAttemptSectionBytesSchema = z.object({
+  rubric: z.number().int().nonnegative(),
+  variantBody: z.number().int().nonnegative(),
+  finalMessage: z.number().int().nonnegative(),
+  toolSummary: z.number().int().nonnegative(),
+  outputs: z.number().int().nonnegative().optional(),
+});
+export type JudgeAttemptSectionBytes = z.infer<typeof JudgeAttemptSectionBytesSchema>;
+
+export const JudgeAttemptSchema = z.object({
+  label: z.enum(['first', 'retry']),
+  model: z.string(),
+  // Effort flag actually passed to spawnJudge. `null` means --effort was omitted
+  // (e.g. Haiku, no effort menu). Stringified so future effort levels load on
+  // older clients without a schema bump.
+  effort: z.string().nullable(),
+  capMultiplier: z.number().positive(),
+  promptTotalBytes: z.number().int().nonnegative(),
+  sectionBytes: JudgeAttemptSectionBytesSchema,
+  // Why this attempt is a retry. Null on the first attempt.
+  retryReason: z.enum(['timeout', 'parse']).nullable(),
+  // SHA-256 of the canary token. Lets us correlate a leaked canary across logs
+  // without persisting the secret itself.
+  canaryHashSha256: z.string(),
+  result: JudgeAttemptResultSchema,
+});
+export type JudgeAttempt = z.infer<typeof JudgeAttemptSchema>;
+
+export const JudgeAttemptsFileSchema = z.object({
+  runFolder: z.string(),
+  createdAt: z.string(),
+  attempts: z.array(JudgeAttemptSchema),
+});
+export type JudgeAttemptsFile = z.infer<typeof JudgeAttemptsFileSchema>;
 
 // JSON Schema passed to `claude --json-schema` for structured output enforcement at generation time.
 export const JUDGE_MODEL_JSON_SCHEMA = {
@@ -90,7 +167,7 @@ export const JUDGE_MODEL_JSON_SCHEMA = {
         clarity: { type: 'string', maxLength: 300, minLength: 1 },
       },
     },
-    rationale: { type: 'string', maxLength: 600, minLength: 1 },
+    rationale: { type: 'string', maxLength: 1200, minLength: 1 },
     ungradeable: {
       type: 'object',
       additionalProperties: false,
