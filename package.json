@@ -2,6 +2,17 @@
   "name": "mdredd",
   "version": "0.2.0",
   "description": "A/B test your Claude Code instruction files.",
+  "keywords": [
+    "ab-testing",
+    "claude",
+    "claude-code",
+    "claude-md",
+    "developer-tools",
+    "llm-evaluation",
+    "llm-tools",
+    "prompt-engineering",
+    "prompt-testing"
+  ],
   "type": "module",
   "bin": {
     "mdredd": "bin/mdredd.js"
