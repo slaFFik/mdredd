@@ -7,7 +7,7 @@ import { deriveSlug, listRunFolderNames } from './slug.js';
 import { runJudge } from './judge.js';
 import { SessionStore } from './session.js';
 import { log } from './log.js';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import { atomicWriteJson, isNotFound, readJsonIfExists } from './fsUtil.js';
 import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
@@ -349,7 +349,22 @@ export class RunManager extends EventEmitter {
     });
 
     this.active.set(columnId, runner);
+    const previousRunFolder = col.currentRunFolder;
     await this.opts.session.setColumnField(columnId, 'currentRunFolder', slug.folderName);
+    if (previousRunFolder && previousRunFolder !== slug.folderName) {
+      // Re-running a column replaces its only displayed run; nuke the prior
+      // folder so we don't accumulate orphans the UI can never reach. Best
+      // effort — a permission failure logs but does not abort the new run.
+      const dir = join(this.opts.storageRoot, previousRunFolder);
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch (err) {
+        log.warn('runManager.previous-folder-cleanup-failed', {
+          runFolder: previousRunFolder,
+          error: (err as Error).message,
+        });
+      }
+    }
 
     this.emitSse({
       t: 'run.started',
