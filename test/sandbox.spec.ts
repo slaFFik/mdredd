@@ -152,10 +152,13 @@ await scenario('sandbox: nested symlink that escapes cwd is refused too', async 
   });
 });
 
-await scenario('sandbox: cycle inside a subtree is detected', async () => {
+await scenario('sandbox: cycle inside a subtree is detected on first encounter', async () => {
   await withCwd(async (cwd) => {
     await mkdir(join(cwd, 'a', 'b'), { recursive: true });
-    // a/b/loop -> a   (cycle: a -> a/b -> a)
+    // a/b/loop -> a   (cycle: a -> a/b -> a). The realpath of `a` should be
+    // in ancestors by the time we reach the symlink, so the symlink is
+    // rejected before it ever gets mirrored — not after we've already started
+    // walking the cycle one level in.
     await symlink(join(cwd, 'a'), join(cwd, 'a', 'b', 'loop'));
     await writeFile(join(cwd, 'a', 'file.txt'), 'x');
 
@@ -163,8 +166,53 @@ await scenario('sandbox: cycle inside a subtree is detected', async () => {
     if (!(await pathExists(join(sb.projectDir, 'a', 'file.txt')))) {
       throw new Error('expected a/file.txt to mirror');
     }
-    if (await pathExists(join(sb.projectDir, 'a', 'b', 'loop', 'b', 'loop'))) {
-      throw new Error('cycle should not have been followed deeply');
+    if (await pathExists(join(sb.projectDir, 'a', 'b', 'loop'))) {
+      throw new Error('cycle symlink should be rejected on first encounter');
+    }
+  });
+});
+
+await scenario('sandbox: nested .gitignore can negate a root rule', async () => {
+  await withCwd(async (cwd) => {
+    await writeFile(join(cwd, '.gitignore'), '*.log\n');
+    await mkdir(join(cwd, 'apps', 'foo'), { recursive: true });
+    await writeFile(join(cwd, 'apps', 'foo', '.gitignore'), '!keep.log\n');
+    await writeFile(join(cwd, 'apps', 'foo', 'keep.log'), 'kept');
+    await writeFile(join(cwd, 'apps', 'foo', 'noisy.log'), 'noise');
+    await writeFile(join(cwd, 'top.log'), 'top');
+
+    const sb = await build(cwd);
+    const all = await listAllRel(sb.projectDir);
+    if (!all.includes('apps/foo/keep.log')) {
+      throw new Error('nested !keep.log should override root *.log');
+    }
+    if (all.includes('apps/foo/noisy.log')) {
+      throw new Error('root *.log should still hide non-negated nested files');
+    }
+    if (all.includes('top.log')) {
+      throw new Error('root *.log should still hide top-level matches');
+    }
+  });
+});
+
+await scenario('fsBrowser: directory-only gitignore pattern matches a symlinked dir', async () => {
+  await withCwd(async (cwd) => {
+    const realDir = join(cwd, 'real');
+    await mkdir(realDir);
+    await writeFile(join(realDir, 'inside.txt'), 'x');
+    // The gitignore rule is directory-only (`build/`) and the entry is a
+    // symlink to a directory. Dirent.isDirectory() reports false for links,
+    // so without resolving the link we'd miss the rule and leak the link.
+    await symlink(realDir, join(cwd, 'build'));
+    await writeFile(join(cwd, '.gitignore'), 'build/\n');
+    await writeFile(join(cwd, 'kept.txt'), 'visible');
+
+    const list = await listDir(cwd, '');
+    if (list.entries.some((e) => e.name === 'build')) {
+      throw new Error('symlinked directory should be filtered by build/ rule');
+    }
+    if (!list.entries.some((e) => e.name === 'kept.txt')) {
+      throw new Error('expected kept.txt to appear');
     }
   });
 });

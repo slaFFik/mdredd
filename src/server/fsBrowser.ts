@@ -41,8 +41,6 @@ export async function listDir(cwd: string, relPath: string): Promise<FsListResul
   for (const e of raw) {
     if (SKIP_ALWAYS.has(e.name)) continue;
     const relEntry = safePath ? `${safePath}/${e.name}` : e.name;
-    const matchPath = e.isDirectory() ? `${relEntry}/` : relEntry;
-    if (ig?.ignores(matchPath)) continue;
 
     const entryPath = join(target, e.name);
     let lst;
@@ -51,10 +49,18 @@ export async function listDir(cwd: string, relPath: string): Promise<FsListResul
     } catch {
       continue;
     }
+
+    // Resolve effective dir-ness/size off the validated realpath. Doing this
+    // before the gitignore check matters for symlinks: Dirent.isDirectory()
+    // returns false on a link, so a directory-only pattern like `build/`
+    // would miss a symlinked dir if we built `matchPath` off the dirent
+    // alone. It also closes a TOCTOU window — once we've confirmed `real`
+    // is inside cwd, the follow-up stat goes through `real` so the link
+    // can't be swapped out from under us between checks.
+    let isDirectory: boolean;
+    let size = 0;
     if (lst.isSymbolicLink()) {
-      // Hide symlinks whose target escapes cwd — without this, `stat` below
-      // would report sizes for files outside the project.
-      let real;
+      let real: string;
       try {
         real = await realpath(entryPath);
       } catch {
@@ -63,21 +69,22 @@ export async function listDir(cwd: string, relPath: string): Promise<FsListResul
       if (real !== cwdReal && !real.startsWith(cwdReal + sep)) {
         continue;
       }
-    }
-
-    let size = 0;
-    let isDirectory = e.isDirectory();
-    if (lst.isSymbolicLink()) {
+      let realLst;
       try {
-        const s = await stat(entryPath);
-        isDirectory = s.isDirectory();
-        if (s.isFile()) size = s.size;
+        realLst = await lstat(real);
       } catch {
         continue;
       }
-    } else if (lst.isFile()) {
-      size = lst.size;
+      isDirectory = realLst.isDirectory();
+      if (realLst.isFile()) size = realLst.size;
+    } else {
+      isDirectory = lst.isDirectory();
+      if (lst.isFile()) size = lst.size;
     }
+
+    const matchPath = isDirectory ? `${relEntry}/` : relEntry;
+    if (ig?.ignores(matchPath)) continue;
+
     out.push({
       name: e.name,
       path: relEntry,

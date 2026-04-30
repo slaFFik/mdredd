@@ -197,9 +197,15 @@ class Mirror {
     if (classified.isDir) {
       const subDest = join(dest, name);
       await ensureDir(subDest);
-      const nextAncestors =
-        classified.realTarget !== null ? [...ancestors, classified.realTarget] : ancestors;
-      await this.walk(classified.realTarget ?? source, subDest, rel, chain, nextAncestors, false);
+      // Track every directory we descend into by realpath, not just symlink
+      // targets. Otherwise a symlink that points back at a real ancestor
+      // (e.g. a/b/loop -> a) wouldn't be flagged on first encounter — its
+      // realpath would only land in ancestors after we'd already started
+      // mirroring the cycle one level deep.
+      const walkSource = classified.realTarget ?? source;
+      const walkedReal = classified.realTarget ?? (await realpath(walkSource));
+      const nextAncestors = [...ancestors, walkedReal];
+      await this.walk(walkSource, subDest, rel, chain, nextAncestors, false);
       this.recordMirror(isTopLevel, name);
     } else if (classified.isFile) {
       // Symlink the file itself. For symlink-to-file entries we point at the
@@ -329,10 +335,17 @@ async function maybeAddLocalIgnore(
  * Match an entry against the layered ignore chain. Each layer's rules apply
  * to paths under its `prefix`, expressed relative to that prefix — the same
  * way git evaluates a per-directory `.gitignore`.
+ *
+ * Layers are walked from most-specific (deepest prefix) to least-specific
+ * (root/global) so a nested `!keep.log` can override a broader `*.log` rule
+ * one layer up. `Ignore.test()` returns both `ignored` and `unignored`, so a
+ * negation hit at the deeper layer short-circuits before the outer layer's
+ * rule can re-ignore the entry.
  */
 function matchesIgnoreChain(chain: IgnoreLayer[], relPath: string, isDir: boolean): boolean {
   const tail = isDir ? `${relPath}/` : relPath;
-  for (const layer of chain) {
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const layer = chain[i]!;
     let relToLayer: string;
     if (layer.prefix === '') {
       relToLayer = tail;
@@ -344,7 +357,9 @@ function matchesIgnoreChain(chain: IgnoreLayer[], relPath: string, isDir: boolea
     } else {
       continue;
     }
-    if (layer.ig.ignores(relToLayer)) return true;
+    const result = layer.ig.test(relToLayer);
+    if (result.unignored) return false;
+    if (result.ignored) return true;
   }
   return false;
 }
