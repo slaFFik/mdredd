@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { atomicWriteJson, ensureDir, isNotFound, pathExists, readJsonIfExists } from './fsUtil.js';
 import { GITIGNORE_FILE, LOCK_FILE, SESSION_FILE } from '@shared/constants.js';
@@ -8,8 +8,7 @@ import {
   type SessionFile,
   SessionFileSchema,
 } from '@shared/schemas/session.js';
-import type { RunConfig } from '@shared/schemas/run.js';
-import type { TranscriptFile } from '@shared/schemas/run.js';
+import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import { NormalizedEventSchema, type NormalizedEvent } from '@shared/schemas/events.js';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import { log } from './log.js';
@@ -186,6 +185,32 @@ export class SessionStore {
       }
     }
     return updated;
+  }
+
+  /**
+   * Resolve a run folder name to its absolute on-disk path, but only if the
+   * folder is currently referenced by one of the session's columns. The
+   * column-membership check rejects arbitrary folder names (including stale
+   * orphans on disk) so the reveal endpoint can't be coaxed into opening
+   * paths the user wouldn't otherwise see in the UI. The path resolution +
+   * prefix check is a belt-and-braces guard against escape sequences slipping
+   * through encoding edge cases.
+   */
+  getRunFolderPath(runFolder: string): string {
+    const known = new Set(
+      this.session.columns
+        .map((c) => c.currentRunFolder)
+        .filter((f): f is string => typeof f === 'string'),
+    );
+    if (!known.has(runFolder)) {
+      throw new SessionStoreError('unknown-run-folder', 'unknown run folder', 404);
+    }
+    const root = resolve(this.storageRoot);
+    const abs = resolve(this.storageRoot, runFolder);
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      throw new SessionStoreError('invalid-run-folder', 'invalid run folder', 400);
+    }
+    return abs;
   }
 
   async startNew(): Promise<void> {

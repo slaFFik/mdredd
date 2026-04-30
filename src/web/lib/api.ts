@@ -125,6 +125,10 @@ export async function startNew(): Promise<void> {
   await request('/api/start-new', { method: 'POST' });
 }
 
+export async function revealRun(runFolder: string): Promise<void> {
+  await request(`/api/reveal-run/${encodeURIComponent(runFolder)}`, { method: 'POST' });
+}
+
 export type SseHandler = (e: ServerSseEvent) => void;
 
 export function openSseStream(

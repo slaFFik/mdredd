@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import open from 'open';
 import { SessionStore, SessionStoreError } from './session.js';
 import { RunManager, RunManagerError } from './runManager.js';
 import { type AuthContext, hostMatches, isMutatingMethod, originMatches } from './security.js';
@@ -204,6 +205,25 @@ export function createRouter(deps: RouteDeps) {
         }
         const updated = await deps.session.removeColumn(columnId);
         return json(res, 200, updated);
+      }
+
+      const revealMatch = path.match(/^\/api\/reveal-run\/([^/]+)$/);
+      if (revealMatch && method === 'POST') {
+        const runFolder = decodeURIComponent(revealMatch[1]!);
+        const absPath = deps.session.getRunFolderPath(runFolder);
+        try {
+          await stat(absPath);
+        } catch {
+          return json(res, 404, {
+            error: 'run-folder-missing',
+            message: 'run folder no longer exists on disk',
+          });
+        }
+        // Spawn the OS file manager (Finder / Explorer / xdg-open). The
+        // returned ChildProcess detaches itself; we await only the spawn so a
+        // hung GUI doesn't park the response.
+        await open(absPath);
+        return json(res, 200, { ok: true });
       }
 
       if (path === '/api/start-new' && method === 'POST') {

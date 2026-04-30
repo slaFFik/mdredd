@@ -654,6 +654,22 @@ body {
 .remove-column:hover {
   color: var(--err);
 }
+.reveal-run {
+  background: none;
+  color: var(--fg-dim);
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.reveal-run:hover {
+  color: var(--fg);
+}
+.reveal-run svg {
+  display: block;
+}
 
 .modal-backdrop {
   position: fixed;

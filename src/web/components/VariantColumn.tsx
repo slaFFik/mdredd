@@ -20,6 +20,7 @@ import {
 import type { TokenUsage } from '@shared/schemas/run.js';
 import { JudgeCard } from './JudgeCard.js';
 import { Hint } from './Hint.js';
+import { revealRun } from '../lib/api.js';
 
 const MODELS = [
   { id: 'sonnet', label: 'Sonnet' },
@@ -72,6 +73,7 @@ export function VariantColumn(props: {
   const isLocked = isStreaming || isJudging;
   const canRun = !isLocked && column.prompt.trim();
   const canStop = isStreaming;
+  const runFolder = column.currentRunFolder;
 
   const progressParts = buildProgressParts(status, live, runBundle);
 
@@ -232,6 +234,18 @@ export function VariantColumn(props: {
             </>
           )}
           <span className={`badge ${status}`}>{status}</span>
+          {runFolder && (
+            <Hint content="Open this run's folder in your file manager">
+              <button
+                type="button"
+                className="reveal-run"
+                onClick={() => void revealRun(runFolder)}
+                aria-label="Open run folder"
+              >
+                <FolderIcon />
+              </button>
+            </Hint>
+          )}
           <span style={{ flex: 1 }} />
           {canRemove && !isLocked && (
             <Hint content="Remove column and its associated content from the file system">
@@ -380,4 +394,22 @@ function buildProgressParts(
 
 function totalInputTokens(u: TokenUsage): number {
   return u.inputTokens + u.cacheReadTokens + u.cacheCreationTokens;
+}
+
+function FolderIcon(): JSX.Element {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
 }
