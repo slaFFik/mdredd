@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SessionStore } from './session.js';
+import { SessionStore, SessionStoreError } from './session.js';
 import { RunManager, RunManagerError } from './runManager.js';
 import { type AuthContext, hostMatches, isMutatingMethod, originMatches } from './security.js';
 import { log } from './log.js';
@@ -202,14 +202,7 @@ export function createRouter(deps: RouteDeps) {
             message: 'stop the active run before deleting the column',
           });
         }
-        const updated = await deps.session.mutate((s) => {
-          if (s.columns.length <= 1) {
-            throw new RunManagerError('last-column', 'cannot delete last column', 400);
-          }
-          const idx = s.columns.findIndex((c) => c.id === columnId);
-          if (idx < 0) throw new RunManagerError('column-not-found', 'unknown column', 404);
-          s.columns.splice(idx, 1);
-        });
+        const updated = await deps.session.removeColumn(columnId);
         return json(res, 200, updated);
       }
 
@@ -236,7 +229,7 @@ export function createRouter(deps: RouteDeps) {
 
       return json(res, 404, { error: 'not found' });
     } catch (err) {
-      if (err instanceof RunManagerError) {
+      if (err instanceof RunManagerError || err instanceof SessionStoreError) {
         return json(res, err.httpStatus, { error: err.code, message: err.message });
       }
       log.error('route.unhandled', { path, error: (err as Error).message });

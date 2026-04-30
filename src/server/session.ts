@@ -26,6 +26,16 @@ export interface RunBundle {
   outputs: Array<{ path: string; bytes: number }>;
 }
 
+export class SessionStoreError extends Error {
+  code: string;
+  httpStatus: number;
+  constructor(code: string, message: string, httpStatus = 400) {
+    super(message);
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
 export class SessionStore {
   private readonly storageRoot: string;
   private session: SessionFile;
@@ -134,6 +144,46 @@ export class SessionStore {
       log.warn('session.outputs-walk-failed', { error: (err as Error).message });
     }
     return out;
+  }
+
+  /**
+   * Remove a column and best-effort delete its `currentRunFolder` on disk.
+   * Mirrors `startNew`'s wipe-on-disk semantics: removing a column from the
+   * UI also removes its associated content, so the user doesn't accumulate
+   * orphan folders they can no longer reach.
+   *
+   * Throws via the mutation callback if the column is missing or it's the
+   * last remaining column — caller maps these to HTTP errors. Folder
+   * deletion is `force: true` so a missing dir isn't an error; permission
+   * failures bubble up after the session has already been persisted, which
+   * leaves the user in a clean UI state with the orphan visible only on
+   * the filesystem.
+   */
+  async removeColumn(columnId: string): Promise<SessionFile> {
+    let runFolder: string | null = null;
+    const updated = await this.mutate((s) => {
+      if (s.columns.length <= 1) {
+        throw new SessionStoreError('last-column', 'cannot delete last column', 400);
+      }
+      const idx = s.columns.findIndex((c) => c.id === columnId);
+      if (idx < 0) {
+        throw new SessionStoreError('column-not-found', 'unknown column', 404);
+      }
+      runFolder = s.columns[idx]!.currentRunFolder;
+      s.columns.splice(idx, 1);
+    });
+    if (runFolder) {
+      const dir = join(this.storageRoot, runFolder);
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch (err) {
+        log.warn('session.remove-column-folder-failed', {
+          runFolder,
+          error: (err as Error).message,
+        });
+      }
+    }
+    return updated;
   }
 
   async startNew(): Promise<void> {
