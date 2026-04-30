@@ -17,14 +17,6 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 export const WRITE_TOOLS = [...READ_ONLY_TOOLS, 'Write', 'Edit'];
 
-export const PROJECT_MARKERS = [
-  '.git',
-  'package.json',
-  'composer.json',
-  'Cargo.toml',
-  'pyproject.toml',
-];
-
 // Pin to a concrete model ID, not the `haiku` CLI alias: aliases can be
 // repointed to a future generation or removed, which would silently shift
 // score baselines or break the judge entirely (issue #13). Bump manually

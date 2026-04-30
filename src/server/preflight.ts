@@ -4,12 +4,7 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
-import {
-  PROJECT_INFO_FILE,
-  PROJECT_MARKERS,
-  PROJECTS_DIR_NAME,
-  STORAGE_DIR_NAME,
-} from '@shared/constants.js';
+import { PROJECT_INFO_FILE, PROJECTS_DIR_NAME, STORAGE_DIR_NAME } from '@shared/constants.js';
 import { readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import lockfile from 'proper-lockfile';
 import { log } from './log.js';
@@ -158,22 +153,6 @@ async function cwdGuard(cwd: string, storageRoot: string): Promise<void> {
       'cd into the project root and try again.',
     );
   }
-
-  const hasMarker = await anyExists(PROJECT_MARKERS.map((m) => join(cwd, m)));
-  if (!hasMarker) {
-    throw new PreflightError(
-      'cwd-no-marker',
-      `No project marker (${PROJECT_MARKERS.join(', ')}) found at ${cwd}.`,
-      'Run mdredd from a project root.',
-    );
-  }
-}
-
-async function anyExists(paths: string[]): Promise<boolean> {
-  for (const p of paths) {
-    if (await pathExists(p)) return true;
-  }
-  return false;
 }
 
 async function ensureAutoGitignore(storageRoot: string): Promise<void> {
