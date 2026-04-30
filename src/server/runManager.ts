@@ -515,9 +515,6 @@ function validateColumnReady(col: ColumnConfig): void {
   if (!col.prompt.trim()) {
     throw new RunManagerError('prompt-empty', 'Prompt is empty', 400);
   }
-  if (!col.variantContent.trim()) {
-    throw new RunManagerError('variant-empty', 'Variant content is empty', 400);
-  }
   if (col.variantType !== 'CLAUDE.md' && !col.skillOrAgentName) {
     throw new RunManagerError(
       'skill-agent-name-missing',

@@ -622,6 +622,52 @@ await scenario(
   },
 );
 
+await scenario(
+  'empty variantContent: runManager.startColumn accepts and writes 0-byte variant.md',
+  async () => {
+    // Empty variants are a deliberate baseline test (see issue: comparing a
+    // populated CLAUDE.md/skill/agent against a blank one). Locks the gate
+    // out of validateColumnReady; if anyone re-adds it, this fails.
+    const cwd = await mkdtemp(join(tmpdir(), 'mdredd-empty-variant-'));
+    const storageRoot = join(cwd, 'agents', 'mdredd');
+    const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+    process.env.FAKE_CLAUDE_SCENARIO = 'happy';
+    try {
+      const session = await SessionStore.load(storageRoot, cwd);
+      await session.mutate((s) => {
+        const col = s.columns[0]!;
+        col.variantName = 'empty-baseline'; // explicit name skips the haiku slug spawn
+        col.variantContent = '';
+        col.prompt = 'baseline run';
+      });
+      const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+      await runManager.init();
+
+      const cfg = await runManager.startColumn('col-1');
+      // No public wait on RunManager — poll active until the run finalizes.
+      const deadline = Date.now() + 10_000;
+      while (runManager.isColumnActive('col-1')) {
+        if (Date.now() > deadline) throw new Error('run did not finalize within 10s');
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const tx = JSON.parse(
+        await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8'),
+      ) as { status: string };
+      if (tx.status !== 'completed') {
+        throw new Error(`expected completed, got ${tx.status}`);
+      }
+      const variantBytes = await readFile(join(storageRoot, cfg.runFolder, 'variant.md'));
+      if (variantBytes.length !== 0) {
+        throw new Error(`expected 0-byte variant.md, got ${variantBytes.length}`);
+      }
+    } finally {
+      if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+      else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  },
+);
+
 await scenario('transcript.ndjson: events are appended incrementally during the run', async () => {
   await withSandbox(
     'ndjson-incremental',

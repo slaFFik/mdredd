@@ -70,7 +70,7 @@ export function VariantColumn(props: {
   // editable — runs are independent and write to separate folders.
   const isStreaming = status === 'streaming' || status === 'preparing';
   const isLocked = isStreaming || isJudging;
-  const canRun = !isLocked && column.prompt.trim() && column.variantContent.trim();
+  const canRun = !isLocked && column.prompt.trim();
   const canStop = isStreaming;
 
   const progressParts = buildProgressParts(status, live, runBundle);
@@ -261,15 +261,7 @@ export function VariantColumn(props: {
             Stop
           </button>
         ) : (
-          <Hint
-            content={
-              !column.prompt.trim()
-                ? 'Fill in a prompt'
-                : !column.variantContent.trim()
-                  ? 'Paste variant content'
-                  : 'Run'
-            }
-          >
+          <Hint content={!column.prompt.trim() ? 'Fill in a prompt' : 'Run'}>
             <button onClick={() => void props.onRun(column.id)} disabled={!canRun}>
               Run
             </button>
