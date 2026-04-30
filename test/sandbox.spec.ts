@@ -5,6 +5,16 @@ import { buildSandbox } from '../src/server/sandbox.js';
 import { listDir, readFileCapped, FsBrowserError } from '../src/server/fsBrowser.js';
 import { pathExists } from '../src/server/fsUtil.js';
 
+// Pin the global gitignore lookup to an empty temp dir so these scenarios
+// don't pick up rules from the developer's host (`~/.config/git/ignore` or
+// `$XDG_CONFIG_HOME/git/ignore`). Without this, a host rule like `*.txt`
+// would silently fail `kept.txt` / `fine.txt` assertions locally while CI
+// still passes. loadGlobalGitignore reads these env vars at call time, so
+// setting them before any scenario runs is sufficient.
+const hermeticHome = await mkdtemp(join(tmpdir(), 'mdredd-hermetic-home-'));
+process.env.HOME = hermeticHome;
+process.env.XDG_CONFIG_HOME = hermeticHome;
+
 let failures = 0;
 async function scenario(name: string, run: () => Promise<void>): Promise<void> {
   process.stdout.write(`• ${name} … `);
@@ -318,6 +328,41 @@ await scenario('sandbox: read-only mode plants no .claude/settings.json', async 
     }
   });
 });
+
+await scenario('sandbox: top-level symlink to storage root is refused', async () => {
+  await withCwd(async (cwd) => {
+    // The path-string guard alone misses a symlink whose name doesn't match
+    // the storage-root prefix; the link's realpath does. Without the realpath
+    // check we'd happily descend into the sandbox's own storage and mirror
+    // partially-built run dirs.
+    const storageRoot = join(cwd, '.storage');
+    await mkdir(storageRoot, { recursive: true });
+    await symlink(storageRoot, join(cwd, 'alias'));
+    await writeFile(join(cwd, 'README.md'), 'hi');
+
+    const sb = await buildSandbox({
+      cwd,
+      storageRoot,
+      runFolder: 'run-test',
+      variantType: 'CLAUDE.md',
+      skillOrAgentName: null,
+      variantContent: '# test\n',
+      mode: 'read-only',
+    });
+
+    if (await pathExists(join(sb.projectDir, 'alias'))) {
+      throw new Error('symlink to storage root should not be mirrored');
+    }
+    const skip = sb.skippedTopLevel.find((s) => s.name === 'alias');
+    if (!skip || skip.reason !== 'storage root') {
+      throw new Error(
+        `expected alias skipped as 'storage root', got ${JSON.stringify(sb.skippedTopLevel)}`,
+      );
+    }
+  });
+});
+
+await rm(hermeticHome, { recursive: true, force: true });
 
 if (failures > 0) {
   console.log(`\n${failures} sandbox security scenario(s) FAILED.`);

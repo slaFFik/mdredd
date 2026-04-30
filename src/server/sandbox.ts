@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { join, sep } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import type { Mode, VariantType } from '@shared/schemas/types.js';
 import { atomicWriteJson, ensureDir, loadGitignore, pathExists } from './fsUtil.js';
@@ -66,6 +66,7 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
   await plantSandboxGitDir(projectDir);
 
   const cwdReal = await realpath(input.cwd);
+  const storageRootReal = await realpath(input.storageRoot);
   const ignoreChain: IgnoreLayer[] = [];
   const globalIgnore = await loadGlobalGitignore();
   if (globalIgnore) ignoreChain.push({ prefix: '', ig: globalIgnore });
@@ -73,9 +74,8 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
   if (rootIgnore) ignoreChain.push({ prefix: '', ig: rootIgnore });
 
   const mirror = new Mirror({
-    cwd: input.cwd,
     cwdReal,
-    storageRootResolved: resolve(input.storageRoot),
+    storageRootReal,
     variantConflictTop: conflictTopLevel(input.variantType),
   });
   await mirror.walk(input.cwd, projectDir, '', ignoreChain, [cwdReal], true);
@@ -115,9 +115,8 @@ interface IgnoreLayer {
 }
 
 interface MirrorContext {
-  cwd: string;
   cwdReal: string;
-  storageRootResolved: string;
+  storageRootReal: string;
   variantConflictTop: string | null;
 }
 
@@ -175,10 +174,6 @@ class Mirror {
         this.recordSkip(isTopLevel, name, 'variant conflict');
         return;
       }
-      if (this.isStorageRootDescendant(name)) {
-        this.recordSkip(isTopLevel, name, 'storage root');
-        return;
-      }
     }
 
     const source = join(src, name);
@@ -187,6 +182,20 @@ class Mirror {
     if (classified.kind === 'rejected') {
       this.recordSkip(isTopLevel, name, classified.reason);
       return;
+    }
+
+    if (isTopLevel) {
+      // Storage-root exclusion is checked on the validated realpath of the
+      // entry, not the entry's path string. A top-level symlink such as
+      // `alias -> .storage` would otherwise pass a name-based guard and then
+      // resolve back inside cwd, letting the mirror walk the sandbox's own
+      // state into the run dir. For non-symlinks the realpath is just
+      // `<cwdReal>/<name>`.
+      const real = classified.realTarget ?? join(this.ctx.cwdReal, name);
+      if (this.realIsStorageRoot(real)) {
+        this.recordSkip(isTopLevel, name, 'storage root');
+        return;
+      }
     }
 
     if (matchesIgnoreChain(chain, rel, classified.isDir)) {
@@ -226,12 +235,9 @@ class Mirror {
     if (isTopLevel) this.mirroredTopLevel.push(name);
   }
 
-  private isStorageRootDescendant(topEntryName: string): boolean {
-    const candidate = resolve(this.ctx.cwd, topEntryName);
-    return (
-      candidate === this.ctx.storageRootResolved ||
-      this.ctx.storageRootResolved.startsWith(candidate + sep)
-    );
+  private realIsStorageRoot(real: string): boolean {
+    const root = this.ctx.storageRootReal;
+    return real === root || real.startsWith(root + sep) || root.startsWith(real + sep);
   }
 }
 
