@@ -48,12 +48,12 @@ Once installed, run `mdredd` from any project directory. To update later, re-run
 
 ## How isolation works
 
-Each variant run gets its own sandbox under `~/.mdredd/<run-folder>/`. Storage lives in your home directory, not inside the project being analyzed — this keeps the host project path out of the child's cwd, so the child can't trivially derive the host root and walk back into it. The child `claude` process is spawned with `cwd` set to `<run-folder>/project/`, so everything below describes what that working directory looks like — and what state from your machine reaches the child.
+Each variant run gets its own sandbox under `~/.mdredd/projects/<projectKey>/<run-folder>/`. Storage is scoped per project — `<projectKey>` is hashed from the directory you ran `mdredd` from — so two mdredd instances launched from different projects run simultaneously without overlap. Storage lives in your home directory, not inside the project being analyzed, which keeps the host project path out of the child's cwd so the child can't trivially derive the host root and walk back into it. The child `claude` process is spawned with `cwd` set to `<run-folder>/project/`, so everything below describes what that working directory looks like — and what state from your machine reaches the child.
 
 ### Per-run sandbox layout
 
 ```
-~/.mdredd/<run-folder>/
+~/.mdredd/projects/<projectKey>/<run-folder>/
 ├── project/                     ← child claude's cwd
 │   ├── .git/                    ← planted; empty repo on a `sandbox` branch
 │   ├── CLAUDE.md                ← (CLAUDE.md variants) the variant being tested

@@ -29,6 +29,8 @@ npm run test:judge        # tsx test/judge.spec.ts
 npm run test:preflight    # tsx test/preflight.spec.ts
 npm run test:runner       # tsx test/runner.smoke.ts
 npm run test:sandbox      # tsx test/sandbox.spec.ts
+npm run test:security     # tsx test/security.spec.ts
+npm run test:routes       # tsx test/routes.spec.ts
 npm run test:slug         # tsx test/slug.spec.ts
 ```
 
@@ -61,6 +63,7 @@ Tests are plain tsx scripts, not a framework. Each file declares scenarios via a
 2. **Sandbox** (`src/server/sandbox.ts`) — for each run, builds `~/.mdredd/projects/<projectKey>/<runFolder>/project/` as the child `claude` cwd. **This is the central isolation primitive — read its file-level docstring before changing anything.** Key invariants:
    - An **empty `.git/`** is planted on a `sandbox` branch so Claude Code's upward project-root walk terminates inside the run dir. This prevents host git status, branch, recent commits, and per-project auto-memory from leaking into the child's system prompt.
    - Top-level entries of the user's project are mirrored by recursively walking the source tree, creating real directories on the sandbox side and **symlinking only individual files**. Filtering applies at every level: `HARD_EXCLUDED` (`.git`, `.claude`, `node_modules`, `.DS_Store`), root + nested `.gitignore`, the user's global git excludes file, symlinks whose realpath escapes `cwd`, and symlink cycles.
+   - Filtering subtleties — easy to regress when refactoring `sandbox.ts`: the ignore chain is walked **most-specific to least-specific** using `Ignore.test()` so a nested `!keep.log` overrides a root `*.log` (matches git's per-directory precedence — don't switch to `.ignores()`, which short-circuits and ignores negation). `Mirror.walk` records the **realpath of every directory it descends into** (not only symlink targets), so a symlink pointing back at a real-dir ancestor (`a/b/loop -> a`) is rejected on first encounter rather than after a wasted level of mirroring. Storage-root exclusion uses **realpath** (`realIsStorageRoot` against `classified.realTarget ?? <cwdReal>/<name>`), not the entry's path string — a top-level symlink like `alias -> .storage` would otherwise pass a name-based guard and let the mirror copy the sandbox's own state into a run dir.
    - In `write` mode, a `.claude/settings.json` allows `Write`/`Edit` only against `../outputs/**` (the per-run outputs dir, one level above the child's cwd). Read-only mode passes a tools allowlist of `Read,Glob,Grep,WebSearch,WebFetch`; write mode adds `Write,Edit`.
 3. **Spawn** (`src/server/runner.ts`) — invokes `claude -p <prompt> --output-format stream-json --include-partial-messages --verbose --model <m> --tools <list> --allowedTools <list> --strict-mcp-config --setting-sources project --disable-slash-commands`. The runner **strips** `NODE_OPTIONS`, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`, `CLAUDE_PROJECT_DIR`, `CLAUDE_PROJECT_NAME` from the spawn environment so a parent shell can't override the planted sandbox. `HOME` / `CLAUDE_CONFIG_DIR` are kept so the child reads the user's auth.
 4. **Stream parsing** (`src/server/claudeStream.ts`) — line-buffers stdout into Anthropic stream events. Normalizes them into `NormalizedEvent`s (see `src/shared/schemas/events.ts`). Two non-obvious rules:
@@ -95,4 +98,10 @@ Storage is scoped per project: `~/.mdredd/projects/<projectKey>/` where `project
 
 ## CI
 
-`.github/workflows/ci.yml` runs four jobs in parallel on Node 22.13.x: `lint` (eslint + prettier check), `typecheck`, `build`, `test` (preflight, judge, runner, sandbox specs). All four must pass for the `ci-success` gate. CI only triggers when paths under `src/`, `test/`, `bin/`, build configs, or the workflow itself change — README/doc-only commits skip CI.
+`.github/workflows/ci.yml` runs four jobs in parallel on Node 22.13.x: `lint` (eslint + prettier check), `typecheck`, `build`, `test` (preflight, judge, runner, sandbox, security, routes, slug specs — all run sequentially in one job). All four must pass for the `ci-success` gate. CI only triggers when paths under `src/`, `test/`, `bin/`, build configs, or the workflow itself change — README/doc-only commits skip CI.
+
+## Releasing
+
+`npm version patch` (or `minor`/`major`) bumps `package.json` + `package-lock.json`, commits, and tags. The project `.npmrc` sets `tag-version-prefix=` so the tag is bare semver (`0.1.2`, not `v0.1.2`) — that's what `.github/workflows/publish.yml` triggers on (`tags: ['[0-9]*.[0-9]*.[0-9]*']`). Push the bump commit and the tag together: `git push origin main <tag>`. The publish workflow runs lint/format:check/typecheck/build/test on the runner, validates the tag matches `package.json`'s version, then `npm publish --provenance --access public`. The `repository.url`, `homepage`, and `bugs` fields in `package.json` must be present and point at this GitHub repo or the registry rejects the provenance bundle (E422).
+
+If a publish fails before the version is reserved on npm, the version isn't burned — fix on `main`, force-update the tag (`git tag -f <v> && git push --force origin <v>`), and the workflow retries on the same version. After a successful publish, optionally cut a GitHub release with `gh release create <v> --notes "..."`.
