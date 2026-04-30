@@ -47,7 +47,9 @@ async function withSandbox(
     outputsDir: string;
     initialConfig: RunConfig;
   }) => Promise<void>,
+  options: { mode?: 'read-only' | 'write' } = {},
 ): Promise<void> {
+  const mode = options.mode ?? 'read-only';
   const cwd = await mkdtemp(join(tmpdir(), 'mdredd-smoke-cwd-'));
   const storageRoot = join(cwd, 'agents', 'mdredd');
   const runFolder = `run-${Date.now()}`;
@@ -58,7 +60,7 @@ async function withSandbox(
     variantType: 'CLAUDE.md',
     skillOrAgentName: null,
     variantContent: `# ${scenarioName}\nBe concise.\n`,
-    mode: 'read-only',
+    mode,
   });
   const initialConfig: RunConfig = {
     runFolder,
@@ -71,7 +73,7 @@ async function withSandbox(
     prompt: 'test prompt',
     model: 'haiku',
     effort: null,
-    mode: 'read-only',
+    mode,
     status: 'preparing',
     startedAt: new Date().toISOString(),
     endedAt: null,
@@ -1125,5 +1127,124 @@ await scenario('effort flag: dropped when model rejects the value (sonnet + xhig
     },
   );
 });
+
+await scenario('write mode: --tools and --allowedTools include Write and Edit', async () => {
+  await withSandbox(
+    'write-tools',
+    async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+      const dumpPath = join(runDir, 'argv.txt');
+      const runner = new Runner({
+        claudeBin: fakeBin,
+        projectDir,
+        runDir,
+        outputsDir,
+        prompt: 'go',
+        model: 'haiku',
+        mode: 'write',
+        initialConfig,
+        env: {
+          ...process.env,
+          FAKE_CLAUDE_SCENARIO: 'happy',
+          FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+        },
+      });
+      await runner.start();
+      const final = await runner.wait();
+      if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
+      const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+      // --tools and --allowedTools both carry the same comma-joined list.
+      // Inspect both: a regression where one is set correctly but the other
+      // isn't would leave write mode silently neutered.
+      for (const flag of ['--tools', '--allowedTools']) {
+        const idx = argv.indexOf(flag);
+        if (idx < 0) throw new Error(`expected ${flag} in argv, got: ${argv.join(' ')}`);
+        const value = argv[idx + 1] ?? '';
+        const tools = value.split(',');
+        if (!tools.includes('Write') || !tools.includes('Edit')) {
+          throw new Error(`${flag} missing Write/Edit, got '${value}'`);
+        }
+        if (!tools.includes('Read') || !tools.includes('Glob')) {
+          throw new Error(`${flag} dropped read-only tools, got '${value}'`);
+        }
+      }
+      // The mirrored toolAllowlist on the persisted config drives the judge
+      // rubric and the topbar harness summary, so it has to track too.
+      if (!final.toolAllowlist.includes('Write') || !final.toolAllowlist.includes('Edit')) {
+        throw new Error(
+          `persisted toolAllowlist missing Write/Edit: ${final.toolAllowlist.join(',')}`,
+        );
+      }
+    },
+    { mode: 'write' },
+  );
+});
+
+await scenario(
+  'write mode: child writes to ../outputs/, file lands in outputsDir and surfaces via outputs event',
+  async () => {
+    await withSandbox(
+      'write-end-to-end',
+      async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+        const outputName = 'result.txt';
+        const outputBody = 'persisted across finalize';
+        let observedOutputs: { path: string; bytes: number }[] | null = null;
+        const runner = new Runner({
+          claudeBin: fakeBin,
+          projectDir,
+          runDir,
+          outputsDir,
+          prompt: 'go',
+          model: 'haiku',
+          mode: 'write',
+          initialConfig,
+          env: {
+            ...process.env,
+            FAKE_CLAUDE_SCENARIO: 'write-output',
+            FAKE_CLAUDE_OUTPUT_NAME: outputName,
+            FAKE_CLAUDE_OUTPUT_BODY: outputBody,
+          },
+        });
+        runner.on('outputs', (files) => {
+          observedOutputs = files.map((f) => ({ path: f.path, bytes: f.bytes }));
+        });
+        await runner.start();
+        const final = await runner.wait();
+        if (final.status !== 'completed') {
+          throw new Error(`expected completed, got ${final.status}`);
+        }
+        // 1. The file the child wrote at '../outputs/result.txt' from its cwd
+        //    must end up at the outputsDir mdredd reported. This is the
+        //    relative-path invariant between projectDir and outputsDir.
+        const written = await readFile(join(outputsDir, outputName), 'utf8');
+        if (written !== outputBody) {
+          throw new Error(`outputs/${outputName} content mismatch: '${written}'`);
+        }
+        // 2. The runner emits an 'outputs' event after finalize listing every
+        //    file under outputsDir. Drives the UI and judge.
+        if (!observedOutputs) throw new Error('runner did not emit outputs event');
+        const match = (observedOutputs as { path: string; bytes: number }[]).find(
+          (f) => f.path === outputName,
+        );
+        if (!match) {
+          throw new Error(
+            `outputs event missing ${outputName}: ${JSON.stringify(observedOutputs)}`,
+          );
+        }
+        if (match.bytes !== Buffer.byteLength(outputBody, 'utf8')) {
+          throw new Error(`outputs event bytes mismatch: got ${match.bytes}`);
+        }
+        // 3. The transcript records the Write tool_use so the judge has
+        //    visibility into what the child did. A finalize bug that wiped
+        //    the run dir or skipped the toolUse event would surface here.
+        const transcript = JSON.parse(await readFile(join(runDir, 'transcript.json'), 'utf8')) as {
+          events: Array<{ t: string; tool?: string }>;
+        };
+        const writeUse = transcript.events.find((e) => e.t === 'toolUse' && e.tool === 'Write');
+        if (!writeUse) throw new Error('transcript missing Write toolUse event');
+      },
+      { mode: 'write' },
+    );
+  },
+);
 
 console.log('\nAll runner smoke scenarios passed.');

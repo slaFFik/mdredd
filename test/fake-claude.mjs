@@ -13,6 +13,10 @@
  *   FAKE_CLAUDE_SCENARIO=long           FAKE_CLAUDE_DELAY_MS=N  — sleep N ms before any output
  *   FAKE_CLAUDE_SCENARIO=novel          — emit an unknown top-level event type
  *   FAKE_CLAUDE_SCENARIO=permission-denied — emit a permission denial event
+ *   FAKE_CLAUDE_SCENARIO=write-output   FAKE_CLAUDE_OUTPUT_NAME=N FAKE_CLAUDE_OUTPUT_BODY=B
+ *                                       — synthesize a Write tool_use targeting ../outputs/<N> and
+ *                                         actually create that file (the real claude would have
+ *                                         done it via its Write tool implementation)
  *
  * Flags are intentionally ignored (except --json-schema which causes an early JSON result).
  */
@@ -382,6 +386,31 @@ async function runNovel() {
   emitResult({ numTurns: 1, result: 'hello despite novelty' });
 }
 
+async function runWriteOutput() {
+  // Real claude's Write tool would create the file as a side effect of the
+  // tool_use; we mimic that here so the test can verify the file lands at
+  // mdredd's reported outputsDir. cwd is <run>/project/, so '../outputs/<name>'
+  // resolves to <run>/outputs/<name>.
+  const name = env.FAKE_CLAUDE_OUTPUT_NAME ?? 'result.txt';
+  const body = env.FAKE_CLAUDE_OUTPUT_BODY ?? 'hello from fake claude';
+  const target = `../outputs/${name}`;
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const path = await import('node:path');
+  const absTarget = path.resolve(process.cwd(), target);
+  await mkdir(path.dirname(absTarget), { recursive: true });
+  await writeFile(absTarget, body, 'utf8');
+
+  emitSystemInit();
+  emitMessageStart();
+  emitToolUse('Write', { file_path: target, content: body });
+  emitMessageEnd('tool_use');
+  emitUserToolResult('tu-0', `wrote ${body.length} bytes to ${target}`);
+  emitMessageStart();
+  emitTextBlock(`wrote ${name}`);
+  emitMessageEnd('end_turn');
+  emitResult({ numTurns: 1, result: `wrote ${name}` });
+}
+
 async function runPermissionDenied() {
   emitSystemInit();
   emitMessageStart();
@@ -428,6 +457,9 @@ async function main() {
         break;
       case 'permission-denied':
         await runPermissionDenied();
+        break;
+      case 'write-output':
+        await runWriteOutput();
         break;
       default:
         stderr.write(`fake-claude: unknown scenario "${scenario}"\n`);

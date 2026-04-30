@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { buildSandbox } from '../src/server/sandbox.js';
 import { listDir, readFileCapped, FsBrowserError } from '../src/server/fsBrowser.js';
 import { pathExists } from '../src/server/fsUtil.js';
@@ -27,7 +27,7 @@ async function withCwd(run: (cwd: string) => Promise<void>): Promise<void> {
   }
 }
 
-async function build(cwd: string) {
+async function build(cwd: string, mode: 'read-only' | 'write' = 'read-only') {
   const storageRoot = join(cwd, '.storage');
   return buildSandbox({
     cwd,
@@ -36,7 +36,7 @@ async function build(cwd: string) {
     variantType: 'CLAUDE.md',
     skillOrAgentName: null,
     variantContent: '# test\n',
-    mode: 'read-only',
+    mode,
   });
 }
 
@@ -219,6 +219,55 @@ await scenario('fsBrowser: readFileCapped still works on real files', async () =
     await writeFile(join(cwd, 'README.md'), '# hi');
     const r = await readFileCapped(cwd, 'README.md');
     if (r.content !== '# hi') throw new Error('content mismatch');
+  });
+});
+
+await scenario(
+  'sandbox: write mode plants .claude/settings.json with outputs-only permission rules',
+  async () => {
+    await withCwd(async (cwd) => {
+      const sb = await build(cwd, 'write');
+      if (sb.settingsPath === null) {
+        throw new Error('write mode should report a settingsPath');
+      }
+      const expectedPath = join(sb.projectDir, '.claude', 'settings.json');
+      if (sb.settingsPath !== expectedPath) {
+        throw new Error(`settingsPath = ${sb.settingsPath}, expected ${expectedPath}`);
+      }
+      // The allow rule uses `../outputs/**` — that pattern only resolves to the
+      // run's outputs/ if claude's cwd (projectDir) is exactly one level below
+      // outputsDir. Assert the relative-path invariant explicitly so a future
+      // sandbox layout change can't silently desync from the planted rule.
+      const rel = relative(sb.projectDir, sb.outputsDir);
+      if (rel !== '../outputs') {
+        throw new Error(`outputsDir relative to projectDir = '${rel}', expected '../outputs'`);
+      }
+      const settings = JSON.parse(await readFile(sb.settingsPath, 'utf8'));
+      const allow = settings?.permissions?.allow;
+      const deny = settings?.permissions?.deny;
+      if (
+        !Array.isArray(allow) ||
+        !allow.includes('Write(../outputs/**)') ||
+        !allow.includes('Edit(../outputs/**)')
+      ) {
+        throw new Error(`allow rules missing or wrong: ${JSON.stringify(allow)}`);
+      }
+      if (!Array.isArray(deny) || !deny.includes('Write(**)') || !deny.includes('Edit(**)')) {
+        throw new Error(`deny rules missing or wrong: ${JSON.stringify(deny)}`);
+      }
+    });
+  },
+);
+
+await scenario('sandbox: read-only mode plants no .claude/settings.json', async () => {
+  await withCwd(async (cwd) => {
+    const sb = await build(cwd, 'read-only');
+    if (sb.settingsPath !== null) {
+      throw new Error(`read-only mode should not produce a settings file, got ${sb.settingsPath}`);
+    }
+    if (await pathExists(join(sb.projectDir, '.claude', 'settings.json'))) {
+      throw new Error('read-only mode left a .claude/settings.json on disk');
+    }
   });
 });
 
