@@ -93,13 +93,15 @@ export class SessionStore {
 
   async assembleSnapshot(): Promise<SessionSnapshot> {
     const runs: Record<string, RunBundle> = {};
-    if (await pathExists(this.storageRoot)) {
-      const entries = await readdir(this.storageRoot, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-        const bundle = await this.readRunBundle(entry.name);
-        if (bundle) runs[entry.name] = bundle;
-      }
+    // Load only the run bundles each column points at. session.json is the
+    // single source of truth for which runs are visible — the harness deletes
+    // the prior folder on re-run, and orphans (from older mdredd builds or
+    // external edits) stay invisible by design.
+    for (const col of this.session.columns) {
+      const folder = col.currentRunFolder;
+      if (!folder || runs[folder]) continue;
+      const bundle = await this.readRunBundle(folder);
+      if (bundle) runs[folder] = bundle;
     }
     return { session: this.snapshot, runs };
   }
