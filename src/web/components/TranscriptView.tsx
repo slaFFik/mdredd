@@ -4,6 +4,7 @@ import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.
 import type { ColumnLiveState } from '../App.js';
 import type { NormalizedEvent } from '@shared/schemas/events.js';
 import { formatElapsed, pluralizeToolCalls } from '../lib/format.js';
+import { CollapseToggle } from './CollapseToggle.js';
 import { Hint } from './Hint.js';
 import { MarkdownToggle } from './MarkdownToggle.js';
 import { MarkdownView } from './MarkdownView.js';
@@ -20,13 +21,15 @@ export function TranscriptView(props: {
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const [rendered, setRendered] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     if (!props.isStreaming) return;
+    if (collapsed) return;
     const el = ref.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [props.live.events, props.isStreaming]);
+  }, [props.live.events, props.isStreaming, collapsed]);
 
   const hasLive = props.live.events.length > 0;
 
@@ -65,7 +68,28 @@ export function TranscriptView(props: {
     );
   }
 
-  const toggle = <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />;
+  const alwaysVisible = rendered || collapsed;
+  const toolbar = (
+    <div className={`toolbar-toggles${alwaysVisible ? ' always-visible' : ''}`}>
+      <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />
+      <CollapseToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+    </div>
+  );
+
+  if (collapsed) {
+    return (
+      <div className="md-host transcript-host collapsed">
+        <div className="transcript-collapsed">
+          {buildCollapsedPreview({
+            useLive: props.isStreaming || hasLive,
+            liveEvents: props.live.events,
+            transcriptEvents,
+          })}
+        </div>
+        {toolbar}
+      </div>
+    );
+  }
 
   // Render live events during streaming; transcript events from disk once terminal.
   if (props.isStreaming || hasLive) {
@@ -81,7 +105,7 @@ export function TranscriptView(props: {
             />
           ))}
         </div>
-        {toggle}
+        {toolbar}
       </div>
     );
   }
@@ -99,9 +123,69 @@ export function TranscriptView(props: {
           />
         ))}
       </div>
-      {toggle}
+      {toolbar}
     </div>
   );
+}
+
+function buildCollapsedPreview(args: {
+  useLive: boolean;
+  liveEvents: ColumnLiveState['events'];
+  transcriptEvents: NormalizedEvent[];
+}): string {
+  const raw = args.useLive
+    ? firstTextLineLive(args.liveEvents)
+    : firstTextLineNormalized(args.transcriptEvents);
+  const flat = raw.replace(/\s+/g, ' ').trim();
+  if (!flat) return '…';
+  return `${flat.slice(0, 80)} …`;
+}
+
+function firstTextLineLive(events: ColumnLiveState['events']): string {
+  for (const e of events) {
+    const text = liveEventText(e);
+    if (text) return text;
+  }
+  return '';
+}
+
+function liveEventText(e: ColumnLiveState['events'][number]): string {
+  switch (e.kind) {
+    case 'partial':
+      return e.chunk;
+    case 'tool-use':
+      return `→ ${e.tool}(${e.argsSummary})`;
+    case 'tool-result':
+      return `← ${e.tool}: ${e.resultSummary}`;
+    case 'permission-denied':
+      return `⛔ permission denied: ${e.tool} ${e.path}`;
+    case 'turn':
+      return '';
+  }
+}
+
+function firstTextLineNormalized(events: NormalizedEvent[]): string {
+  for (const e of events) {
+    const text = normalizedEventText(e);
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizedEventText(e: NormalizedEvent): string {
+  switch (e.t) {
+    case 'partial':
+      return e.chunk;
+    case 'toolUse':
+      return `→ ${e.tool}(${e.argsSummary})`;
+    case 'toolResult':
+      return `← ${e.tool}: ${e.resultSummary}`;
+    case 'permissionDenied':
+      return `⛔ permission denied: ${e.tool} ${e.path}`;
+    case 'turn':
+    case 'message':
+      return '';
+  }
 }
 
 /**

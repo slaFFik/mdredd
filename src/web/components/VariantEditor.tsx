@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent, type JSX } from 'react';
+import { CollapseToggle } from './CollapseToggle.js';
 import { FilePickerModal } from './FilePickerModal.js';
 import { Hint } from './Hint.js';
 import { MarkdownToggle } from './MarkdownToggle.js';
@@ -12,6 +13,7 @@ export function VariantEditor(props: {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [rendered, setRendered] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -22,6 +24,8 @@ export function VariantEditor(props: {
   };
 
   const hasContent = props.value.trim().length > 0;
+  const alwaysVisible = rendered || collapsed;
+  const hostClass = `md-host${collapsed ? ' collapsed' : ''}`;
 
   return (
     <div className="variant-editor">
@@ -51,8 +55,10 @@ export function VariantEditor(props: {
           />
         </span>
       </div>
-      <div className="md-host">
-        {rendered ? (
+      <div className={hostClass}>
+        {collapsed && hasContent ? (
+          <div className="variant-collapsed">{previewLine(props.value)}</div>
+        ) : rendered ? (
           <MarkdownView content={props.value} className="variant-rendered" />
         ) : (
           <textarea
@@ -63,7 +69,10 @@ export function VariantEditor(props: {
           />
         )}
         {hasContent && (
-          <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />
+          <div className={`toolbar-toggles${alwaysVisible ? ' always-visible' : ''}`}>
+            <MarkdownToggle rendered={rendered} onToggle={() => setRendered((v) => !v)} />
+            <CollapseToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+          </div>
         )}
       </div>
       <FilePickerModal
@@ -73,4 +82,9 @@ export function VariantEditor(props: {
       />
     </div>
   );
+}
+
+function previewLine(value: string): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return `${flat.slice(0, 80)} …`;
 }
