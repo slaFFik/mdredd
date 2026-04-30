@@ -1,6 +1,6 @@
 {
   "name": "mdredd",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A/B test your Claude Code instruction files.",
   "type": "module",
   "bin": {
