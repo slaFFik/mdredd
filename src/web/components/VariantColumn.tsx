@@ -234,7 +234,7 @@ export function VariantColumn(props: {
           <span className={`badge ${status}`}>{status}</span>
           <span style={{ flex: 1 }} />
           {canRemove && !isLocked && (
-            <Hint content="Remove column">
+            <Hint content="Remove column and its associated content from the file system">
               <button className="remove-column" onClick={() => void props.onRemove(column.id)}>
                 ×
               </button>

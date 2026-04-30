@@ -737,8 +737,9 @@ export function App(): JSX.Element {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Remove variant column?</h3>
             <p>
-              This removes the column from the current session. Any runs for this column stay on
-              disk under <code>~/.mdredd/</code> but won't be visible here.
+              This removes the column from the current session and deletes its run folder under{' '}
+              <code>~/.mdredd/</code>. The transcript, judge result, and any outputs for this
+              column's last run are gone for good.
             </p>
             <div className="actions">
               <button
