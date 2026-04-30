@@ -4,12 +4,20 @@
   "description": "A/B test your Claude Code instruction files.",
   "type": "module",
   "bin": {
-    "mdredd": "./bin/mdredd.js"
+    "mdredd": "bin/mdredd.js"
   },
   "files": [
     "bin",
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/slaFFik/mdredd.git"
+  },
+  "homepage": "https://github.com/slaFFik/mdredd#readme",
+  "bugs": {
+    "url": "https://github.com/slaFFik/mdredd/issues"
+  },
   "scripts": {
     "build": "npm run build:web && npm run build:server",
     "build:server": "tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
