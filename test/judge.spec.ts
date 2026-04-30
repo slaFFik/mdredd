@@ -6,6 +6,7 @@ import {
   buildJudgePrompt,
   extractFinalAssistantMessage,
   extractToolSummary,
+  formatJudgeSubprocessExitError,
   midEllipsis,
   readOutputContents,
   runJudge,
@@ -1998,6 +1999,31 @@ scenario('judge.attempts.json: spawn ENOENT records result=spawn_error', async (
       );
     }
   });
+});
+
+scenario('judge exit error: extracts Claude JSON envelope when stderr is empty', () => {
+  // Real failure shape observed against haiku-4-5: the CLI exits 1 with an
+  // empty stderr and an `is_error:true` envelope on stdout.
+  const stdout = JSON.stringify({
+    type: 'result',
+    is_error: true,
+    api_error_status: 529,
+    result: 'API Error: 529 Overloaded. This is a server-side issue, usually temporary.',
+  });
+  expect(
+    formatJudgeSubprocessExitError(1, stdout, ''),
+    'judge subprocess exited 1: API Error: 529 Overloaded. This is a server-side issue, usually temporary.',
+    'envelope error surfaced',
+  );
+});
+
+scenario('judge exit error: stderr takes precedence over JSON envelope', () => {
+  const stdout = JSON.stringify({ is_error: true, result: 'envelope reason' });
+  expect(
+    formatJudgeSubprocessExitError(1, stdout, 'real stderr crash'),
+    'judge subprocess exited 1: real stderr crash',
+    'stderr wins',
+  );
 });
 
 scenario('judge.attempts.json: canary leak records result=canary_leak', async () => {

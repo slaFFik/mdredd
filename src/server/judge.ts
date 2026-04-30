@@ -1076,6 +1076,33 @@ export interface SpawnJudgeOptions {
   model: string;
 }
 
+// The claude CLI surfaces operational errors (auth, 529 overload, rate limit,
+// schema rejection) through the --output-format json envelope: non-zero exit,
+// empty stderr, and `{ is_error: true, result: "<reason>" }` on stdout.
+// Reading only stderr would drop the actual cause; pull `result` out of the
+// envelope before falling back to raw stdout.
+function extractClaudeJsonError(stdout: string): string | null {
+  try {
+    const parsed = JSON.parse(stdout) as { is_error?: unknown; result?: unknown };
+    if (parsed.is_error === true && typeof parsed.result === 'string' && parsed.result.trim()) {
+      return parsed.result.trim();
+    }
+  } catch {
+    // Non-JSON stdout falls through to the raw-output fallback in the caller.
+  }
+  return null;
+}
+
+export function formatJudgeSubprocessExitError(
+  code: number | null,
+  stdout: string,
+  stderr: string,
+): string {
+  const detail = stderr.trim() || extractClaudeJsonError(stdout) || stdout.trim();
+  const suffix = detail ? `: ${detail.slice(0, 500)}` : '';
+  return `judge subprocess exited ${code ?? 'null'}${suffix}`;
+}
+
 function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -1132,7 +1159,7 @@ function spawnJudge(claudeBin: string, prompt: string, opts: SpawnJudgeOptions):
     proc.on('exit', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`judge subprocess exited ${code}: ${stderr.slice(0, 500)}`));
+        reject(new Error(formatJudgeSubprocessExitError(code, stdout, stderr)));
         return;
       }
       resolve(stdout);
