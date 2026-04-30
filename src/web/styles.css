@@ -834,13 +834,24 @@ body {
   display: block;
 }
 
-/* ------- markdown toggle + rendered view ------- */
+/* ------- toolbar toggles (markdown preview + collapse) + rendered view ------- */
 
-.md-toggle {
+.md-host > .toolbar-toggles {
   position: absolute;
   top: 6px;
   right: 6px;
   z-index: 2;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.md-host:hover > .toolbar-toggles,
+.md-host > .toolbar-toggles:focus-within,
+.md-host > .toolbar-toggles.always-visible {
+  opacity: 1;
+}
+.toolbar-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -850,23 +861,39 @@ body {
   border-radius: 4px;
   padding: 3px 5px;
   cursor: pointer;
-  opacity: 0;
   transition:
-    opacity 0.12s ease,
     color 0.12s ease,
     background 0.12s ease;
 }
-.md-host:hover .md-toggle,
-.md-toggle.rendered,
-.md-toggle:focus-visible {
-  opacity: 1;
-}
-.md-toggle:hover {
+.toolbar-icon-button:hover {
   color: var(--fg);
   background: var(--bg-elev);
 }
-.md-toggle svg {
+.toolbar-icon-button svg {
   display: block;
+}
+
+.md-host.collapsed {
+  flex: 0 0 auto;
+}
+.transcript-host.collapsed .transcript-collapsed,
+.variant-editor .md-host.collapsed .variant-collapsed {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transcript-host.collapsed .transcript-collapsed {
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.variant-editor .md-host.collapsed .variant-collapsed {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  background: var(--bg);
 }
 
 .markdown-view {

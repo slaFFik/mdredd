@@ -1,11 +1,11 @@
 import type { JSX } from 'react';
 import { ToolbarIconButton } from './ToolbarIconButton.js';
 
-export function MarkdownToggle(props: { rendered: boolean; onToggle: () => void }): JSX.Element {
-  const label = props.rendered ? 'Switch to raw view' : 'Preview rendered markdown';
+export function CollapseToggle(props: { collapsed: boolean; onToggle: () => void }): JSX.Element {
+  const label = props.collapsed ? 'Expand' : 'Collapse';
   return (
     <ToolbarIconButton
-      icon={props.rendered ? <CodeIcon /> : <EyeIcon />}
+      icon={props.collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
       ariaLabel={label}
       title={label}
       onClick={props.onToggle}
@@ -13,7 +13,7 @@ export function MarkdownToggle(props: { rendered: boolean; onToggle: () => void 
   );
 }
 
-function EyeIcon(): JSX.Element {
+function ChevronUpIcon(): JSX.Element {
   return (
     <svg
       width="13"
@@ -26,13 +26,12 @@ function EyeIcon(): JSX.Element {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
-      <circle cx="12" cy="12" r="3" />
+      <polyline points="18 15 12 9 6 15" />
     </svg>
   );
 }
 
-function CodeIcon(): JSX.Element {
+function ChevronDownIcon(): JSX.Element {
   return (
     <svg
       width="13"
@@ -45,8 +44,7 @@ function CodeIcon(): JSX.Element {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <polyline points="16 18 22 12 16 6" />
-      <polyline points="8 6 2 12 8 18" />
+      <polyline points="6 9 12 15 18 9" />
     </svg>
   );
 }
