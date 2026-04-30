@@ -700,7 +700,7 @@ export function App(): JSX.Element {
         {session.columns.length < 3 && (
           <Hint content="Add a column">
             <button className="add-column" onClick={onAddColumn}>
-              +
+              <span className="add-column-glyph">+</span>
             </button>
           </Hint>
         )}

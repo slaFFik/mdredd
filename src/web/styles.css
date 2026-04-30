@@ -626,6 +626,18 @@ body {
   font-size: 14px;
   cursor: pointer;
   min-width: 60px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.add-column-glyph {
+  position: sticky;
+  top: 50vh;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 .add-column:disabled {
   opacity: 0.35;
