@@ -235,7 +235,7 @@ await scenario('multi-turn: completes with exact turn count', async () => {
   });
 });
 
-await scenario('tool-use does not count as a turn', async () => {
+await scenario('tool-use stops count as turns', async () => {
   await withSandbox('tool-use', async ({ runDir, projectDir, outputsDir, initialConfig }) => {
     const runner = new Runner({
       claudeBin: fakeBin,
@@ -251,10 +251,11 @@ await scenario('tool-use does not count as a turn', async () => {
     });
     await runner.start();
     const final = await runner.wait();
-    // The tool-use scenario emits: one assistant msg with stop_reason=tool_use (not a turn),
-    // a tool result, then one final assistant msg with stop_reason=end_turn (a turn).
+    // The tool-use scenario emits: one assistant msg with stop_reason=tool_use,
+    // a tool result, then one final assistant msg with stop_reason=end_turn.
+    // Both assistant message_stops increment the counter.
     if (final.status !== 'completed') throw new Error(`expected completed, got ${final.status}`);
-    if (final.turnCount !== 1) throw new Error(`expected 1 turn, got ${final.turnCount}`);
+    if (final.turnCount !== 2) throw new Error(`expected 2 turns, got ${final.turnCount}`);
   });
 });
 

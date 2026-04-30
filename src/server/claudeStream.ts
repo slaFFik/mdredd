@@ -21,7 +21,8 @@ import { log } from './log.js';
  *   {type: "system", subtype: "init", ...}
  *
  * Turn counting (plan § Safety cap): increment on message_stop when the current message
- * role === "assistant" and stop_reason !== "tool_use". Partial/delta events never count.
+ * role === "assistant". Partial/delta events never count. Tool-use stops count
+ * too — the counter advances on each intermediate assistant message.
  */
 
 export interface ClaudeStreamParserEvents {
@@ -39,7 +40,6 @@ type Listener<E extends keyof ClaudeStreamParserEvents> = ClaudeStreamParserEven
 export class ClaudeStreamParser extends EventEmitter {
   private turnCount = 0;
   private currentMessageRole: string | null = null;
-  private currentStopReason: string | null = null;
   private currentToolName: string | null = null;
   private currentToolUseId: string | null = null;
   private currentToolInputBuffer = '';
@@ -141,7 +141,6 @@ export class ClaudeStreamParser extends EventEmitter {
       case 'message_start': {
         const message = ev.message as Record<string, unknown> | undefined;
         this.currentMessageRole = (message?.role as string | undefined) ?? null;
-        this.currentStopReason = null;
         return;
       }
       case 'content_block_start': {
@@ -195,20 +194,17 @@ export class ClaudeStreamParser extends EventEmitter {
         this.currentToolUseId = null;
         return;
       }
-      case 'message_delta': {
-        const delta = ev.delta as Record<string, unknown> | undefined;
-        const reason = delta?.stop_reason;
-        if (typeof reason === 'string') this.currentStopReason = reason;
+      case 'message_delta':
+        // No-op: stop_reason and usage are duplicated in the `result` event.
+        // Listed explicitly so the parser doesn't log it as a novel type.
         return;
-      }
       case 'message_stop': {
-        if (this.currentMessageRole === 'assistant' && this.currentStopReason !== 'tool_use') {
+        if (this.currentMessageRole === 'assistant') {
           this.turnCount += 1;
           this.emit('turn', this.turnCount);
           this.emitNormalized({ t: 'turn', turn: this.turnCount, ts: Date.now() });
         }
         this.currentMessageRole = null;
-        this.currentStopReason = null;
         return;
       }
       case 'permission_denied': {
