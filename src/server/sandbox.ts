@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, link, lstat, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
@@ -30,15 +30,19 @@ export interface SandboxResult {
  *
  *   <storageRoot>/<runFolder>/
  *     project/           ← child claude's cwd
- *       <user's cwd mirrored as a tree of real dirs + per-file symlinks>
+ *       <user's cwd mirrored as a tree of real dirs + per-file hardlinks>
  *       CLAUDE.md or .claude/skills/<name>/SKILL.md or .claude/agents/<name>.md
  *       .claude/settings.json  (write mode only)
  *     outputs/           ← write target for write mode; empty in read-only
  *
  * The mirror walks the source tree recursively, creating real directories on
- * the sandbox side and symlinking only individual files. This lets us apply
- * filtering (gitignore, hard-exclude, symlink-target validation) at every
- * level, not just at the top.
+ * the sandbox side and hardlinking individual files (falling back to copy on
+ * EXDEV when the storage root sits on a different filesystem from the source).
+ * This lets us apply filtering (gitignore, hard-exclude, symlink-target
+ * validation) at every level, not just at the top. Hardlinks rather than
+ * symlinks because Claude Code's `Glob` and `Grep` tools are backed by
+ * `rg --files`, which skips symlinks unless `--follow` is passed — symlinking
+ * the leaves makes the entire tree invisible to glob-based discovery.
  *
  * Filtered at every level:
  *   - HARD_EXCLUDED entries (`.git`, `.claude`, `node_modules`, `.DS_Store`)
@@ -217,10 +221,18 @@ class Mirror {
       await this.walk(walkSource, subDest, rel, chain, nextAncestors, false);
       this.recordMirror(isTopLevel, name);
     } else if (classified.isFile) {
-      // Symlink the file itself. For symlink-to-file entries we point at the
-      // realpath rather than re-creating an indirect chain — the realpath was
-      // already verified to be inside cwd above.
-      await symlink(classified.realTarget ?? source, join(dest, name));
+      // Link the realpath rather than the source path. `link()` does not
+      // follow symlinks, so a symlink-to-file source would otherwise produce
+      // another symlink-leaf and reproduce the rg-can't-see-symlinks bug
+      // the file-level docstring describes. Realpath was verified above.
+      const linkSource = classified.realTarget ?? source;
+      const linkDest = join(dest, name);
+      try {
+        await link(linkSource, linkDest);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+        await copyFile(linkSource, linkDest);
+      }
       this.recordMirror(isTopLevel, name);
     } else {
       this.recordSkip(isTopLevel, name, 'unsupported file type');

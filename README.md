@@ -59,7 +59,7 @@ Each variant run gets its own sandbox under `~/.mdredd/projects/<projectKey>/<ru
 │   ├── CLAUDE.md                ← (CLAUDE.md variants) the variant being tested
 │   ├── .claude/skills/<name>/SKILL.md   ← (skill variants)
 │   ├── .claude/agents/<name>.md         ← (agent variants)
-│   └── <top-level entries>      ← symlinked from your project, see below
+│   └── <top-level entries>      ← hardlinked from your project, see below
 ├── outputs/                     ← write target in Write mode; empty in read-only
 ├── variant.md                   ← exact bytes of the variant we ran
 ├── config.json                  ← run config + token usage + cost
@@ -72,13 +72,13 @@ Each variant run gets its own sandbox under `~/.mdredd/projects/<projectKey>/<ru
 ### What the child claude sees
 
 - **The variant file**, written at its canonical path (`CLAUDE.md`, `.claude/skills/<name>/SKILL.md`, or `.claude/agents/<name>.md`).
-- **Symlinks to every top-level entry of your project** that isn't excluded — so `Read`, `Glob`, and `Grep` resolve to your real files. This is intentional: it keeps stack detection realistic, so skills like `pest-testing`, `inertia-react-development`, etc. that Claude Code auto-suggests from `composer.json` / `package.json` still load the way they would in a real session.
+- **A mirror of every top-level entry of your project** that isn't excluded: directories are recreated, individual files are hardlinked back to your sources (copy fallback when source and `~/.mdredd` live on different filesystems). `Read`, `Glob`, and `Grep` therefore see real files at every leaf — Claude Code's ripgrep-backed `Glob`/`Grep` skip symlinks without `--follow`, so hardlinks rather than symlinks are required for glob discovery to work at all. Stack detection stays realistic: skills like `pest-testing`, `inertia-react-development`, etc. that Claude Code auto-suggests from `composer.json` / `package.json` still load the way they would in a real session.
 - **Your global Claude Code auth** (`HOME` / `CLAUDE_CONFIG_DIR` are passed through unmodified) so the child can talk to the API.
 - **Your user-global instructions at `~/.claude/CLAUDE.md`** and any user-global skills/agents/plugins/MCP servers you have installed — these are part of "how Claude behaves on your machine" and are deliberately not stripped.
 
 ### What the child claude does **not** see
 
-- **Your project's real `.git/`.** A self-contained empty `.git/` is planted in the sandbox before any symlinks, so Claude Code's upward project-root walk terminates inside the run folder. Result: `git status` is clean, `git branch --show-current` returns `sandbox`, `git log` reports no commits — none of your branch name, working-tree status, or recent commit subjects can be auto-injected into the child's system prompt.
+- **Your project's real `.git/`.** A self-contained empty `.git/` is planted in the sandbox before any files are mirrored, so Claude Code's upward project-root walk terminates inside the run folder. Result: `git status` is clean, `git branch --show-current` returns `sandbox`, `git log` reports no commits — none of your branch name, working-tree status, or recent commit subjects can be auto-injected into the child's system prompt.
 - **Your project's auto-memory.** Because Claude Code derives the per-project memory directory (`~/.claude/projects/<encoded-cwd>/memory/`) from where it found `.git`, the planted sandbox `.git/` redirects this lookup to a per-run path that's empty by default. Your project's accumulated `feedback_*.md` / `project_*.md` notes do not bleed in.
 - **Your project's `.claude/` directory.** Hard-excluded so an on-disk skill or agent file with the same name can't shadow the variant under test.
 - **mdredd's own storage** (`~/.mdredd/`), to keep variant runs out of each other's sandboxes.
@@ -95,4 +95,4 @@ Two artifacts make this auditable:
 ### Known limits
 
 - A baseline ~5–10k cache-creation tokens still come from Claude Code's own system prompt, tool schemas, and your user-global config (`~/.claude/CLAUDE.md`, user-level skills). That overhead is the same for every variant in a session, so it cancels out in A/B comparisons — but it's not zero.
-- Symlinks mean `realpath()` of any file inside the sandbox resolves outside it. If a future Claude Code version starts using `realpath` for project resolution instead of `.git` walking, the planted `.git/` won't catch that path. Watch `init.json`'s `memory_paths.auto` after Claude Code updates.
+- Hardlinks share an inode with your source files. The planted `.claude/settings.json` deny rules (`Write(**)`, `Edit(**)` with a single `../outputs/**` allow) keep the child from writing to anything but the per-run outputs directory, so this isolation is path-based and survives the inode sharing — but if you ever loosen those rules in your fork, writes through the sandbox path will modify the underlying source file.

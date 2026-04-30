@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { buildSandbox } from '../src/server/sandbox.js';
@@ -328,6 +338,57 @@ await scenario('sandbox: read-only mode plants no .claude/settings.json', async 
     }
   });
 });
+
+await scenario(
+  'sandbox: regular files are mirrored as hardlinks (visible to rg --files)',
+  async () => {
+    await withCwd(async (cwd) => {
+      // ripgrep-backed Glob/Grep skip symlinks without --follow. Hardlinking
+      // leaves makes the sandbox tree indistinguishable from a real one to
+      // anything that walks the filesystem.
+      await writeFile(join(cwd, 'a.tsx'), 'export {}');
+
+      const sb = await build(cwd);
+      const mirrored = join(sb.projectDir, 'a.tsx');
+      const linkStat = await lstat(mirrored);
+      if (linkStat.isSymbolicLink()) {
+        throw new Error('mirrored regular file should not be a symlink');
+      }
+      const srcStat = await lstat(join(cwd, 'a.tsx'));
+      if (linkStat.ino !== srcStat.ino) {
+        // EXDEV fallback would copy instead — only acceptable when source and
+        // sandbox live on different filesystems. The temp dir helper places
+        // both under tmpdir(), so they should share a filesystem here.
+        throw new Error('hardlink should share inode with source');
+      }
+    });
+  },
+);
+
+await scenario(
+  'sandbox: symlink-to-file is mirrored as a hardlink to the realpath target',
+  async () => {
+    await withCwd(async (cwd) => {
+      // A symlink-to-file inside cwd resolves to a real file we already verified
+      // is inside cwd; the mirror should hardlink the realpath, not the symlink
+      // (linking the symlink would re-create a symlink-leaf and reproduce the
+      // visibility bug we're fixing).
+      await writeFile(join(cwd, 'real.tsx'), 'export {}');
+      await symlink(join(cwd, 'real.tsx'), join(cwd, 'aliased.tsx'));
+
+      const sb = await build(cwd);
+      const mirrored = join(sb.projectDir, 'aliased.tsx');
+      const linkStat = await lstat(mirrored);
+      if (linkStat.isSymbolicLink()) {
+        throw new Error('symlink-to-file should be mirrored as a real file, not a symlink');
+      }
+      const realSrc = await lstat(join(cwd, 'real.tsx'));
+      if (linkStat.ino !== realSrc.ino) {
+        throw new Error('hardlink should share inode with the realpath target');
+      }
+    });
+  },
+);
 
 await scenario('sandbox: top-level symlink to storage root is refused', async () => {
   await withCwd(async (cwd) => {
