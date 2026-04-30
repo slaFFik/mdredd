@@ -1,50 +1,47 @@
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { pathExists } from './fsUtil.js';
-import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
-import { SLUG_MODEL } from '@shared/constants.js';
-import { log } from './log.js';
+import slugify from 'slugify';
+import { pathExists } from './fsUtil.js';
 
 const MAX_SLUG_LENGTH = 32;
 
 export interface SlugInput {
-  explicitName: string; // user-entered variant name; empty string means auto-generate
-  variantContent: string; // current variant content (used for hashing + Haiku input)
-  claudeBin: string;
+  /** User-entered variant name; empty string means fallback to `variant-<columnIndex>`. */
+  explicitName: string;
+  /** Variant content; only the trailing 6-char hash is derived from it. */
+  variantContent: string;
+  /** 1-based column position; used in the fallback slug `variant-N`. */
+  columnIndex: number;
   now?: Date;
 }
 
 export interface SlugResult {
-  folderName: string; // <timestamp>-<slug-base>-<hash>
+  folderName: string;
   slugBase: string;
   contentHash: string;
   timestamp: string;
-  source: 'explicit' | 'haiku' | 'fallback';
+  source: 'explicit' | 'fallback';
 }
 
-export function formatTimestamp(d: Date): string {
-  // Unix epoch seconds — 10 digits, sorts correctly as a string, compact in folder listings.
-  // Second-precision → collisions within a single second are handled by the suffix logic
-  // in deriveSlug (only trips when timestamp + slug base + content hash all match).
+// Unix epoch seconds — 10 digits, sorts correctly as a string. Second-precision
+// is enough since same-second collisions are handled by the numeric suffix in
+// deriveSlug (and only trip when timestamp + slug base + content hash all match).
+function formatTimestamp(d: Date): string {
   return Math.floor(d.getTime() / 1000).toString();
 }
 
-export function hashContent(content: string): string {
+function hashContent(content: string): string {
   const lfNormalized = content.replace(/\r\n/g, '\n');
   return createHash('sha256').update(lfNormalized, 'utf8').digest('hex').slice(0, 6);
 }
 
-export function kebabCase(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, MAX_SLUG_LENGTH)
-    .replace(/^-+|-+$/g, '');
+export function slugifyName(input: string): string {
+  return slugify(input, { lower: true, strict: true, trim: true }).slice(0, MAX_SLUG_LENGTH);
 }
 
-export function isSafeSlugFragment(s: string): boolean {
+// Defense-in-depth: slugify shouldn't produce these, but a future config change
+// or extension could. Reject anything that could escape the per-run dir.
+function isSafeSlugFragment(s: string): boolean {
   if (!s) return false;
   if (s.startsWith('.')) return false;
   if (s.includes('/') || s.includes('..') || s.includes('\\')) return false;
@@ -52,13 +49,11 @@ export function isSafeSlugFragment(s: string): boolean {
 }
 
 /**
- * Derive the run folder name. If explicitName is given, kebab-case it.
- * Otherwise, briefly block on a Haiku slug generation; fall back to literal "variant" on failure.
+ * Derive the run folder name. Uses the user-entered variant name when present
+ * (slugified via the `slugify` library); otherwise falls back to a positional
+ * `variant-<columnIndex>` slug. Synchronous — no model spawn.
  */
-export async function deriveSlug(
-  input: SlugInput,
-  existingFolderNames: Set<string>,
-): Promise<SlugResult> {
+export function deriveSlug(input: SlugInput, existingFolderNames: Set<string>): SlugResult {
   const now = input.now ?? new Date();
   const timestamp = formatTimestamp(now);
   const contentHash = hashContent(input.variantContent);
@@ -66,26 +61,17 @@ export async function deriveSlug(
   let slugBase = '';
   let source: SlugResult['source'] = 'fallback';
 
-  if (input.explicitName.trim()) {
-    slugBase = kebabCase(input.explicitName.trim());
-    if (isSafeSlugFragment(slugBase)) {
+  const trimmed = input.explicitName.trim();
+  if (trimmed) {
+    const candidate = slugifyName(trimmed);
+    if (isSafeSlugFragment(candidate)) {
+      slugBase = candidate;
       source = 'explicit';
-    } else {
-      slugBase = '';
     }
   }
 
   if (!slugBase) {
-    const modelSlug = await tryModelSlug(input.variantContent, input.claudeBin);
-    if (modelSlug && isSafeSlugFragment(modelSlug)) {
-      slugBase = modelSlug;
-      source = 'haiku';
-    }
-  }
-
-  if (!slugBase) {
-    slugBase = 'variant';
-    source = 'fallback';
+    slugBase = `variant-${input.columnIndex}`;
   }
 
   let folderName = `${timestamp}-${slugBase}-${contentHash}`;
@@ -105,76 +91,4 @@ export async function listRunFolderNames(storageRoot: string): Promise<Set<strin
   return new Set(
     entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name),
   );
-}
-
-export function slugStoragePath(storageRoot: string, folderName: string): string {
-  return join(storageRoot, folderName);
-}
-
-async function tryModelSlug(content: string, claudeBin: string): Promise<string | null> {
-  const prompt =
-    'Produce a 2-4 word kebab-case slug summarizing this variant. Output only the slug, no quotes, no explanation. Example: "concise-style" or "verbose-debugging". Variant content follows:\n\n' +
-    content.slice(0, 4_000);
-
-  return new Promise<string | null>((resolve) => {
-    let done = false;
-    const finish = (value: string | null) => {
-      if (done) return;
-      done = true;
-      resolve(value);
-    };
-
-    const proc = spawn(
-      claudeBin,
-      [
-        '-p',
-        prompt,
-        '--model',
-        SLUG_MODEL,
-        '--output-format',
-        'json',
-        '--tools',
-        '',
-        '--allowedTools',
-        '',
-        '--strict-mcp-config',
-        '--setting-sources',
-        'project',
-        '--disable-slash-commands',
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-
-    let buf = '';
-    proc.stdout.on('data', (d) => (buf += d.toString()));
-    proc.stderr.on('data', (d) => {
-      log.debug('model-slug stderr', { text: d.toString().slice(0, 200) });
-    });
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGKILL');
-      finish(null);
-    }, 8_000);
-
-    proc.on('error', (err) => {
-      clearTimeout(timer);
-      log.warn('model-slug spawn error', { error: err.message });
-      finish(null);
-    });
-
-    proc.on('exit', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) return finish(null);
-      try {
-        const parsed = JSON.parse(buf);
-        const result: string | undefined = parsed.result;
-        if (!result) return finish(null);
-        const extracted = result.trim().split(/\s+/)[0] ?? '';
-        const slug = kebabCase(extracted);
-        finish(slug || null);
-      } catch {
-        finish(null);
-      }
-    });
-  });
 }

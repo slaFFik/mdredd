@@ -13,7 +13,6 @@
  *   FAKE_CLAUDE_SCENARIO=long           FAKE_CLAUDE_DELAY_MS=N  — sleep N ms before any output
  *   FAKE_CLAUDE_SCENARIO=novel          — emit an unknown top-level event type
  *   FAKE_CLAUDE_SCENARIO=permission-denied — emit a permission denial event
- *   FAKE_CLAUDE_SCENARIO=prompt-echo    — echo the prompt back; useful for slug resolution tests
  *
  * Flags are intentionally ignored (except --json-schema which causes an early JSON result).
  */
@@ -400,34 +399,6 @@ async function runPermissionDenied() {
   emitResult({ numTurns: 1, result: 'could not write' });
 }
 
-async function runPromptEcho() {
-  if (jsonSchemaRaw) {
-    stdout.write(JSON.stringify({ slug: slugOf(prompt) }) + '\n');
-    return;
-  }
-  if (outputFormat === 'json') {
-    stdout.write(JSON.stringify({ result: slugOf(prompt) }) + '\n');
-    return;
-  }
-  emitSystemInit();
-  emitMessageStart();
-  emitTextBlock(slugOf(prompt));
-  emitMessageEnd('end_turn');
-  emitResult({ numTurns: 1, result: slugOf(prompt) });
-}
-
-function slugOf(s) {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, '')
-      .trim()
-      .split(/\s+/)
-      .slice(0, 3)
-      .join('-') || 'variant'
-  );
-}
-
 async function main() {
   try {
     switch (scenario) {
@@ -457,9 +428,6 @@ async function main() {
         break;
       case 'permission-denied':
         await runPermissionDenied();
-        break;
-      case 'prompt-echo':
-        await runPromptEcho();
         break;
       default:
         stderr.write(`fake-claude: unknown scenario "${scenario}"\n`);

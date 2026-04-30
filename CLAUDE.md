@@ -24,11 +24,12 @@ npm run lint          # eslint .
 npm run format        # prettier --write .
 npm run format:check  # prettier --check .
 
-npm test              # judge + preflight + runner + sandbox + security specs (in that order)
+npm test              # judge + preflight + runner + sandbox + security + routes + slug specs (in that order)
 npm run test:judge        # tsx test/judge.spec.ts
 npm run test:preflight    # tsx test/preflight.spec.ts
 npm run test:runner       # tsx test/runner.smoke.ts
 npm run test:sandbox      # tsx test/sandbox.spec.ts
+npm run test:slug         # tsx test/slug.spec.ts
 ```
 
 ### Environment and CLI flags

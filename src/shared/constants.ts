@@ -39,12 +39,6 @@ export const JUDGE_MODEL_OPTIONS = [
   { id: 'claude-opus-4-7', label: 'Opus' },
 ] as const;
 
-// Model used to auto-generate run-folder slugs from variant content. Kept
-// separate from JUDGE_MODEL so the slug generator can move independently —
-// slugs are non-critical (they fall back gracefully) and don't anchor any
-// historical comparison the way judge scores do.
-export const SLUG_MODEL = 'claude-haiku-4-5';
-
 // Stream-time per-tool truncation. Applied in `claudeStream.ts` when the
 // transcript event is built, so these caps bound what ever reaches disk and
 // the judge. Larger values mean richer tool detail at the cost of bigger

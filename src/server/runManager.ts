@@ -278,7 +278,8 @@ export class RunManager extends EventEmitter {
       );
     }
     const sessionSnap = this.opts.session.snapshot;
-    const col = sessionSnap.columns.find((c) => c.id === columnId);
+    const colIdx = sessionSnap.columns.findIndex((c) => c.id === columnId);
+    const col = sessionSnap.columns[colIdx];
     if (!col) throw new RunManagerError('column-not-found', `unknown column ${columnId}`, 404);
 
     validateColumnReady(col);
@@ -288,11 +289,11 @@ export class RunManager extends EventEmitter {
     }
 
     const existingFolders = await listRunFolderNames(this.opts.storageRoot);
-    const slug = await deriveSlug(
+    const slug = deriveSlug(
       {
         explicitName: col.variantName,
         variantContent: col.variantContent,
-        claudeBin: this.opts.claudeBin,
+        columnIndex: colIdx + 1,
       },
       existingFolders,
     );

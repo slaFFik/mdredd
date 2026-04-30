@@ -94,6 +94,7 @@ jobs:
       - run: npm run test:sandbox
       - run: npm run test:security
       - run: npm run test:routes
+      - run: npm run test:slug
 
   ci-success:
     name: CI Success
