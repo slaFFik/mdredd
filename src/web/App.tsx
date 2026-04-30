@@ -714,8 +714,8 @@ export function App(): JSX.Element {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Start new?</h3>
             <p>
-              This wipes <code>session.json</code> and every run folder under{' '}
-              <code>~/.mdredd/</code>, except <code>.gitignore</code> and <code>.lock</code>.
+              This resets every variant column and deletes every saved run. Transcripts, judge
+              results, and outputs are gone for good.
             </p>
             <div className="actions">
               <button onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>
