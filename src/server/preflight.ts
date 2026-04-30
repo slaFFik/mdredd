@@ -19,7 +19,6 @@ const execFileAsync = promisify(execFile);
 export interface PreflightInput {
   cwd: string;
   claudeBin: string;
-  force?: boolean;
 }
 
 export interface PreflightResult {
@@ -53,7 +52,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   // anyone running mdredd has already exercised `claude` at least once. If
   // auth is broken, the first run's stderr surfaces in the UI via SSE.
   const globalRoot = join(homedir(), STORAGE_DIR_NAME);
-  await cwdGuard(input.cwd, input.force ?? false, globalRoot);
+  await cwdGuard(input.cwd, globalRoot);
   // Per-project storage so two mdredds in different cwds don't share a lock,
   // session, or run history. The cwd-inside-storage guard above still uses
   // the global root so a user can't run mdredd from inside `~/.mdredd/`.
@@ -134,7 +133,7 @@ async function checkClaudeCli(bin: string): Promise<void> {
   }
 }
 
-async function cwdGuard(cwd: string, force: boolean, storageRoot: string): Promise<void> {
+async function cwdGuard(cwd: string, storageRoot: string): Promise<void> {
   const home = homedir();
   if (cwd === home) {
     throw new PreflightError(
@@ -160,14 +159,12 @@ async function cwdGuard(cwd: string, force: boolean, storageRoot: string): Promi
     );
   }
 
-  if (force) return;
-
   const hasMarker = await anyExists(PROJECT_MARKERS.map((m) => join(cwd, m)));
   if (!hasMarker) {
     throw new PreflightError(
       'cwd-no-marker',
       `No project marker (${PROJECT_MARKERS.join(', ')}) found at ${cwd}.`,
-      'Run mdredd from a project root, or pass --force.',
+      'Run mdredd from a project root.',
     );
   }
 }

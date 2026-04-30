@@ -25,12 +25,10 @@ const isDev = import.meta.url.endsWith('.ts');
 async function main(): Promise<void> {
   const cwd = process.cwd();
   const claudeBin = process.env.CLAUDE_BIN ?? 'claude';
-  const force = process.argv.includes('--force');
-  const shouldOpen = !process.argv.includes('--no-open');
 
   let preflight;
   try {
-    preflight = await runPreflight({ cwd, claudeBin, force });
+    preflight = await runPreflight({ cwd, claudeBin });
   } catch (err) {
     const e = err as { code?: string; message: string; hint?: string };
     console.error(`mdredd: ${e.code ?? 'error'} — ${e.message}`);
@@ -93,9 +91,7 @@ async function main(): Promise<void> {
           if (isDev) {
             console.log(`open in browser (Vite + HMR): ${devUrl}`);
           }
-          if (shouldOpen) {
-            void maybeOpen(browserUrl, isDev, preflight.storageRoot);
-          }
+          void maybeOpen(browserUrl, isDev, preflight.storageRoot);
         })
         .catch((err) => {
           console.error(`mdredd: could not write lock metadata: ${(err as Error).message}`);

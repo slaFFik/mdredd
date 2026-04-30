@@ -36,7 +36,7 @@ npm run test:slug         # tsx test/slug.spec.ts
 
 - `CLAUDE_BIN` — path to the `claude` binary. Defaults to `claude` (resolved via PATH). Point this at `test/fake-claude.mjs` to drive the runner deterministically without spending tokens.
 - `MDREDD_LOG_LEVEL` — `debug` | `info` (default) | `warn` | `error`. Server-only; logs go to stdout (info/debug) or stderr (warn/error).
-- `bin/mdredd.js` flags: `--force` (skip the project-marker check from `cwdGuard` — useful when running mdredd from a directory without `.git`/`package.json`/etc.); `--no-open` (don't auto-open the browser).
+- `bin/mdredd.js` takes no flags. The cwd must contain a project marker (`.git`, `package.json`, etc. — see `PROJECT_MARKERS`); the browser opens automatically on first launch and is suppressed on tsx-watch hot restarts via `~/.mdredd/.dev-open-marker`.
 
 Tests are plain tsx scripts, not a framework. Each file declares scenarios via a local `scenario(name, fn)` helper and exits non-zero on failure. To run a single scenario, edit the file's queue or comment out the others — there's no `--grep`. Most server tests use `test/fake-claude.mjs` (a stand-in for the real `claude` CLI) selected via `FAKE_CLAUDE_SCENARIO` env vars.
 
