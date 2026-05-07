@@ -450,6 +450,12 @@ body {
   font-style: italic;
   white-space: pre-wrap;
 }
+/* When rendered as markdown, source `\n` between paragraphs/list items would
+ * otherwise compound with the block-element margins react-markdown adds —
+ * override the pre-wrap inherited from .text / .thinking on the same div. */
+.transcript .markdown-view {
+  white-space: normal;
+}
 .transcript .tool-use {
   color: var(--accent);
 }
@@ -462,8 +468,8 @@ body {
 .transcript .turn-marker {
   color: var(--fg-dim);
   border-top: 1px dashed var(--border);
-  padding-top: 4px;
-  margin-top: 4px;
+  padding-top: 6px;
+  margin-top: 14px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
