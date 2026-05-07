@@ -233,7 +233,11 @@ export function VariantColumn(props: {
               </Hint>
             </>
           )}
-          <span className={`badge ${status}`}>{status}</span>
+          {(() => {
+            const badge = <span className={`badge ${status}`}>{status}</span>;
+            const hint = statusHint(status, runBundle);
+            return hint ? <Hint content={hint}>{badge}</Hint> : badge;
+          })()}
           {runFolder && (
             <Hint content="Open this run's folder in your file manager">
               <button
@@ -329,6 +333,29 @@ function pickLocalList(
   if (variantType === 'skill') return local.skills;
   if (variantType === 'agent') return local.agents;
   return [];
+}
+
+function statusHint(status: ColumnStatus, runBundle: { config: RunConfig } | null): string | null {
+  const cfg = runBundle?.config ?? null;
+  switch (status) {
+    case 'truncated': {
+      const reason = cfg?.truncationReason;
+      if (reason === 'turns') return `Hit the ${cfg?.caps.turns ?? 0}-turn cap.`;
+      if (reason === 'wallclock') {
+        const capMs = cfg?.caps.wallClockMs ?? 0;
+        return `Hit the wallclock cap (${formatElapsed(capMs)}).`;
+      }
+      return 'Truncated by mdredd before the model finished.';
+    }
+    case 'errored':
+      return cfg?.errorMessage
+        ? `Errored: ${cfg.errorMessage}`
+        : 'The claude subprocess exited unexpectedly.';
+    case 'abandoned':
+      return 'mdredd exited mid-run on a previous boot; this run could not be resumed.';
+    default:
+      return null;
+  }
 }
 
 interface StatusPart {
