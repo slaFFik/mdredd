@@ -32,6 +32,9 @@ export interface RunnerInput {
   model: string;
   effort?: Effort | null; // null/undefined → omit --effort
   mode: Mode;
+  // When true, widens --setting-sources to `user,project` and drops
+  // --disable-slash-commands. See buildArgs() for the full trade-off.
+  userScopeEnabled?: boolean;
   allowedTools?: string[]; // defaults based on mode
   caps?: { turns?: number; wallClockMs?: number };
   env?: NodeJS.ProcessEnv;
@@ -425,9 +428,15 @@ export class Runner extends EventEmitter {
       toolsStr,
       '--strict-mcp-config',
       '--setting-sources',
-      'project',
-      '--disable-slash-commands',
+      // `user,project` is all-or-nothing in `claude -p` — widening also pulls
+      // in the user CLAUDE.md, plugins, env, and permissions from settings.json.
+      this.input.userScopeEnabled ? 'user,project' : 'project',
     ];
+    // With project-only sources the only slash commands are CLI built-ins;
+    // disable so they don't dispatch and make runs non-deterministic.
+    if (!this.input.userScopeEnabled) {
+      args.push('--disable-slash-commands');
+    }
     // Write mode: nudge the child to mirror source paths under ../outputs/
     // instead of bailing on the sandbox's Write(**)/Edit(**) deny rule.
     if (this.input.mode === 'write') {

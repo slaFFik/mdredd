@@ -1309,6 +1309,79 @@ await scenario(
 );
 
 await scenario(
+  'user-scope toggle: session.userScopeEnabled flows through RunManager to the spawn argv',
+  async () => {
+    for (const enabled of [false, true] as const) {
+      const cwd = await mkdtemp(join(tmpdir(), `mdredd-user-scope-${enabled}-`));
+      const storageRoot = join(cwd, 'agents', 'mdredd');
+      const dumpPath = join(cwd, 'argv.txt');
+      const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+      const savedDump = process.env.FAKE_CLAUDE_DUMP_ARGS;
+      process.env.FAKE_CLAUDE_SCENARIO = 'happy';
+      process.env.FAKE_CLAUDE_DUMP_ARGS = dumpPath;
+      try {
+        const session = await SessionStore.load(storageRoot, cwd);
+        await session.mutate((s) => {
+          s.userScopeEnabled = enabled;
+          s.judgeEnabled = false; // unrelated to this test; skip the extra spawn
+          const col = s.columns[0]!;
+          col.variantName = `user-scope-${enabled}`; // explicit name skips slug spawn
+          col.variantContent = '# variant\n';
+          col.prompt = 'do a thing';
+        });
+        const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+        await runManager.init();
+        const cfg = await runManager.startColumn('col-1');
+        const deadline = Date.now() + 10_000;
+        while (runManager.isColumnActive('col-1')) {
+          if (Date.now() > deadline) throw new Error('run did not finalize within 10s');
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        const finalCfg = JSON.parse(
+          await readFile(join(storageRoot, cfg.runFolder, 'config.json'), 'utf8'),
+        ) as { status: string };
+        if (finalCfg.status !== 'completed') {
+          throw new Error(
+            `userScopeEnabled=${enabled}: expected completed, got ${finalCfg.status}`,
+          );
+        }
+        const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+        const idx = argv.indexOf('--setting-sources');
+        const expectedScope = enabled ? 'user,project' : 'project';
+        if (idx < 0 || argv[idx + 1] !== expectedScope) {
+          throw new Error(
+            `userScopeEnabled=${enabled}: expected --setting-sources ${expectedScope}, got ${argv[idx + 1]}`,
+          );
+        }
+        const hasDisable = argv.includes('--disable-slash-commands');
+        if (enabled && hasDisable) {
+          throw new Error(
+            `userScopeEnabled=true: --disable-slash-commands should be absent, got argv: ${argv.join(' ')}`,
+          );
+        }
+        if (!enabled && !hasDisable) {
+          throw new Error(
+            `userScopeEnabled=false: --disable-slash-commands should be present, got argv: ${argv.join(' ')}`,
+          );
+        }
+        // Isolation flags survive the toggle change.
+        if (!argv.includes('--strict-mcp-config')) {
+          throw new Error(
+            `userScopeEnabled=${enabled}: --strict-mcp-config missing, got argv: ${argv.join(' ')}`,
+          );
+        }
+      } finally {
+        if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+        else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+        if (savedDump === undefined) delete process.env.FAKE_CLAUDE_DUMP_ARGS;
+        else process.env.FAKE_CLAUDE_DUMP_ARGS = savedDump;
+        await rm(cwd, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+await scenario(
   'write mode: appends system prompt directing outputs to ../outputs/<rel>',
   async () => {
     for (const mode of ['write', 'read-only'] as const) {

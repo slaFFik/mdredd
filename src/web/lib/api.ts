@@ -72,6 +72,7 @@ export async function patchSession(body: {
   mode?: string;
   judgeEnabled?: boolean;
   judgeModel?: string;
+  userScopeEnabled?: boolean;
   defaultModel?: string;
 }): Promise<SessionFile> {
   return request<SessionFile>('/api/session', {

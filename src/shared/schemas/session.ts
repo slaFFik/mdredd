@@ -17,16 +17,30 @@ export const ColumnConfigSchema = z.object({
 });
 export type ColumnConfig = z.infer<typeof ColumnConfigSchema>;
 
-export const SessionFileSchema = z.object({
-  mode: ModeSchema,
-  judgeEnabled: z.boolean(),
-  // Concrete model ID (not an alias) used by the Haiku-by-default judge subprocess.
-  // Optional+default keeps pre-existing session.json files (without this field) parsing cleanly.
-  judgeModel: ModelIdSchema.optional().default('claude-haiku-4-5'),
-  defaultModel: ModelIdSchema,
-  cwd: z.string(),
-  columns: z.array(ColumnConfigSchema).min(1).max(3),
-});
+// `skillsEnabled` was renamed to `userScopeEnabled`; copy the old key forward
+// so existing session.json files keep the user's prior choice.
+export const SessionFileSchema = z.preprocess(
+  (data) => {
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const obj = data as Record<string, unknown>;
+      if ('skillsEnabled' in obj && !('userScopeEnabled' in obj)) {
+        const { skillsEnabled, ...rest } = obj;
+        return { ...rest, userScopeEnabled: skillsEnabled };
+      }
+    }
+    return data;
+  },
+  z.object({
+    mode: ModeSchema,
+    judgeEnabled: z.boolean(),
+    // Optional+default keeps pre-existing session.json files (without this field) parsing cleanly.
+    judgeModel: ModelIdSchema.optional().default('claude-haiku-4-5'),
+    userScopeEnabled: z.boolean().optional().default(false),
+    defaultModel: ModelIdSchema,
+    cwd: z.string(),
+    columns: z.array(ColumnConfigSchema).min(1).max(3),
+  }),
+);
 export type SessionFile = z.infer<typeof SessionFileSchema>;
 
 export const MAX_COLUMNS = 3;
@@ -37,6 +51,7 @@ export function makeDefaultSession(cwd: string): SessionFile {
     mode: 'read-only',
     judgeEnabled: true,
     judgeModel: 'claude-haiku-4-5',
+    userScopeEnabled: false,
     defaultModel,
     cwd,
     columns: [makeBlankColumn('col-1', defaultModel), makeBlankColumn('col-2', defaultModel)],

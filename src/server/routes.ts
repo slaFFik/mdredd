@@ -141,6 +141,8 @@ export function createRouter(deps: RouteDeps) {
             }
             s.judgeModel = next;
           }
+          if (body.userScopeEnabled !== undefined)
+            s.userScopeEnabled = Boolean(body.userScopeEnabled);
           if (body.defaultModel !== undefined) s.defaultModel = String(body.defaultModel);
         });
         return json(res, 200, updated);
@@ -262,6 +264,7 @@ interface PatchSessionBody {
   mode?: string;
   judgeEnabled?: boolean;
   judgeModel?: string;
+  userScopeEnabled?: boolean;
   defaultModel?: string;
 }
 

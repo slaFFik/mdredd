@@ -620,6 +620,19 @@ body {
   padding: 0 4px;
   border-radius: 2px;
 }
+.user-scope-hint p {
+  margin: 0 0 6px;
+}
+.user-scope-hint p:last-child {
+  margin-bottom: 0;
+}
+.user-scope-hint ul {
+  margin: 0 0 6px;
+  padding-left: 16px;
+}
+.user-scope-hint .dim {
+  color: var(--fg-dim);
+}
 
 .add-column {
   flex: 0 0 auto;

@@ -352,6 +352,7 @@ export class RunManager extends EventEmitter {
       model: col.model,
       effort: col.effort ?? defaultEffortForModel(col.model),
       mode: sessionSnap.mode as Mode,
+      userScopeEnabled: sessionSnap.userScopeEnabled,
       initialConfig,
     });
 

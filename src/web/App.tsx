@@ -22,6 +22,7 @@ import {
 import { VariantColumn } from './components/VariantColumn.js';
 import { Footer, REPO_URL } from './components/Footer.js';
 import { Hint } from './components/Hint.js';
+import { UserScopeHint } from './components/UserScopeHint.js';
 
 type LiveEvent =
   | { kind: 'partial'; streamKind: 'text' | 'thinking'; chunk: string }
@@ -598,6 +599,16 @@ export function App(): JSX.Element {
     }
   }, []);
 
+  const onToggleUserScope = useCallback(async () => {
+    if (!state.session) return;
+    try {
+      const s = await patchSession({ userScopeEnabled: !state.session.userScopeEnabled });
+      dispatch({ type: 'session-patched', payload: s });
+    } catch (err) {
+      dispatch({ type: 'error', message: (err as Error).message });
+    }
+  }, [state.session]);
+
   const onStartNewConfirm = useCallback(async () => {
     dispatch({ type: 'set-confirm-start-new', open: false });
     try {
@@ -650,6 +661,15 @@ export function App(): JSX.Element {
             </div>
           </div>
         </div>
+        <Hint content={<UserScopeHint />}>
+          <button
+            className="chip"
+            aria-pressed={session.userScopeEnabled}
+            onClick={onToggleUserScope}
+          >
+            User scope: {session.userScopeEnabled ? 'On' : 'Off'}
+          </button>
+        </Hint>
         <span className="spacer" />
         <span style={{ color: 'var(--fg-dim)', fontFamily: 'var(--mono)', fontSize: 11 }}>
           {session.cwd}
