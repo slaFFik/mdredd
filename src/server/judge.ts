@@ -245,6 +245,9 @@ export function buildHarnessConstraints(runConfig: RunConfig): string {
     `- The sandbox \`.git/\` is empty by design. Date-of-change, blame, recent commits, and "what was in the previous version" are NOT verifiable from inside the run, even hypothetically.`,
   );
   lines.push(
+    `- Files matching \`.gitignore\` (build artifacts, env files, local config) and entries in a fixed exclusion list (\`.git\`, \`.claude\`, \`node_modules\`, \`.DS_Store\`) are NOT present in the sandbox. Do not penalize the variant for being unable to find such paths.`,
+  );
+  lines.push(
     `- Tool args were truncated at ${STREAM_TOOL_ARGS_CAP_CHARS} chars and tool results at ${STREAM_TOOL_RESULT_CAP_CHARS} chars before reaching this prompt; the judge view is further capped at ${JUDGE_TOOL_SUMMARY_CAP_CHARS} chars per item. A trailing \`…\` or "[truncated]" marker means the variant saw more than you do. Do NOT penalize the variant for content past the marker.`,
   );
   if (isWrite) {
