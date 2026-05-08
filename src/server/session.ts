@@ -1,7 +1,15 @@
 import { join, resolve, sep } from 'node:path';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { atomicWriteJson, ensureDir, isNotFound, pathExists, readJsonIfExists } from './fsUtil.js';
-import { GITIGNORE_FILE, LOCK_FILE, SESSION_FILE } from '@shared/constants.js';
+import {
+  GITIGNORE_FILE,
+  LOCK_FILE,
+  RUN_CONFIG_FILE,
+  RUN_JUDGE_FILE,
+  RUN_TRANSCRIPT_FILE,
+  RUN_TRANSCRIPT_NDJSON_FILE,
+  SESSION_FILE,
+} from '@shared/constants.js';
 import {
   makeDefaultSession,
   type ColumnConfig,
@@ -107,17 +115,17 @@ export class SessionStore {
 
   async readRunBundle(runFolder: string): Promise<RunBundle | null> {
     const runDir = join(this.storageRoot, runFolder);
-    const config = await readJsonIfExists<RunConfig>(join(runDir, 'config.json'));
+    const config = await readJsonIfExists<RunConfig>(join(runDir, RUN_CONFIG_FILE));
     if (!config) return null;
     // Prefer the finalized transcript.json. For in-flight runs (or harness
     // crash recovery) it doesn't exist yet — replay the append-only
     // transcript.ndjson prefix so /api/state still surfaces evidence so far
     // (issue #10).
-    let transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
+    let transcript = await readJsonIfExists<TranscriptFile>(join(runDir, RUN_TRANSCRIPT_FILE));
     if (!transcript) {
       transcript = await readPartialTranscript(runDir, config);
     }
-    const judge = await readJsonIfExists<JudgeFile>(join(runDir, 'judge.json'));
+    const judge = await readJsonIfExists<JudgeFile>(join(runDir, RUN_JUDGE_FILE));
     const outputs = await this.listOutputs(join(runDir, 'outputs'));
     return { config, transcript, judge, outputs };
   }
@@ -240,7 +248,7 @@ async function readPartialTranscript(
 ): Promise<TranscriptFile | null> {
   let raw: string;
   try {
-    raw = await readFile(join(runDir, 'transcript.ndjson'), 'utf8');
+    raw = await readFile(join(runDir, RUN_TRANSCRIPT_NDJSON_FILE), 'utf8');
   } catch (err) {
     if (isNotFound(err)) return null;
     throw err;

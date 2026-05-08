@@ -13,7 +13,14 @@ import type { RunConfig, TranscriptFile } from '@shared/schemas/run.js';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { Mode, RunStatus } from '@shared/schemas/types.js';
 import type { ColumnConfig } from '@shared/schemas/session.js';
-import { defaultEffortForModel } from '@shared/constants.js';
+import {
+  DEFAULT_TURN_CAP,
+  DEFAULT_WALLCLOCK_CAP_MS,
+  RUN_CONFIG_FILE,
+  RUN_TRANSCRIPT_FILE,
+  RUN_VARIANT_FILE,
+  defaultEffortForModel,
+} from '@shared/constants.js';
 
 const SEQ_FILE = '.seq';
 const RING_BUFFER_LIMIT = 2_000;
@@ -84,14 +91,14 @@ export class RunManager extends EventEmitter {
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
       const runDir = join(this.opts.storageRoot, entry.name);
-      const config = await readJsonIfExists<RunConfig>(join(runDir, 'config.json'));
+      const config = await readJsonIfExists<RunConfig>(join(runDir, RUN_CONFIG_FILE));
       if (!config) continue;
       if (config.status !== 'preparing' && config.status !== 'streaming') continue;
       config.status = 'errored';
       config.errorMessage = config.errorMessage ?? 'harness exited mid-run';
       config.endedAt = config.endedAt ?? new Date().toISOString();
       try {
-        await atomicWriteJson(join(runDir, 'config.json'), config);
+        await atomicWriteJson(join(runDir, RUN_CONFIG_FILE), config);
         log.info('runManager.reap-stale-run', { runFolder: entry.name });
       } catch (err) {
         log.warn('runManager.reap-stale-run-failed', {
@@ -333,7 +340,7 @@ export class RunManager extends EventEmitter {
       signal: null,
       errorMessage: null,
       toolAllowlist: [],
-      caps: { turns: 50, wallClockMs: 5 * 60 * 1000 },
+      caps: { turns: DEFAULT_TURN_CAP, wallClockMs: DEFAULT_WALLCLOCK_CAP_MS },
     };
 
     const runner = new Runner({
@@ -468,17 +475,17 @@ export class RunManager extends EventEmitter {
   private async fireJudge(columnId: string, cfg: RunConfig, runFolder: string): Promise<void> {
     this.emitSse({ t: 'judge.started', col: columnId, runFolder } as Omit<ServerSseEvent, 'seq'>);
     const runDir = join(this.opts.storageRoot, runFolder);
-    const transcript = await readJsonIfExists<TranscriptFile>(join(runDir, 'transcript.json'));
+    const transcript = await readJsonIfExists<TranscriptFile>(join(runDir, RUN_TRANSCRIPT_FILE));
     if (!transcript) {
       this.emitSse({
         t: 'judge.errored',
         col: columnId,
         runFolder,
-        error: 'transcript.json missing',
+        error: `${RUN_TRANSCRIPT_FILE} missing`,
       } as Omit<ServerSseEvent, 'seq'>);
       return;
     }
-    const variantPath = join(runDir, 'variant.md');
+    const variantPath = join(runDir, RUN_VARIANT_FILE);
     const variantContent = await readFile(variantPath, 'utf8').catch(() => '');
     const bundle = await this.opts.session.readRunBundle(runFolder);
     const outputs = bundle?.outputs ?? [];

@@ -8,8 +8,24 @@ export const LOCK_FILE = '.lock';
 export const SESSION_FILE = 'session.json';
 export const GITIGNORE_FILE = '.gitignore';
 
+// Per-run filenames inside `<storageRoot>/<runFolder>/`. Writers
+// (runner.ts, runManager.ts, sandbox.ts) and readers (session.ts,
+// preflight.ts, judge.ts) all import from here so renaming any of these
+// is a one-line change. `init.json`, `stream.jsonl`, and `stderr.log` are
+// only written by runner.ts and never read elsewhere — left as literals.
+export const RUN_CONFIG_FILE = 'config.json';
+export const RUN_TRANSCRIPT_FILE = 'transcript.json';
+export const RUN_TRANSCRIPT_NDJSON_FILE = 'transcript.ndjson';
+export const RUN_JUDGE_FILE = 'judge.json';
+export const RUN_VARIANT_FILE = 'variant.md';
+
+// Per-run safety caps. A healthy A/B variant probe finishes in well under
+// either limit; the caps exist to stop pathological runs (a model stuck in a
+// retry loop, a runaway tool-call cycle) from burning tokens indefinitely.
+// Whichever cap fires first marks the run `truncated` with the matching
+// truncationReason, and the judge still grades the partial transcript.
 export const DEFAULT_TURN_CAP = 50;
-export const DEFAULT_WALLCLOCK_CAP_MS = 5 * 60 * 1000;
+export const DEFAULT_WALLCLOCK_CAP_MS = 10 * 60 * 1000;
 
 // Heartbeat cadence for SSE; also acts as a liveness signal for reconnect logic.
 export const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -82,6 +98,15 @@ export const HAIKU_EFFORT_DEFAULT: Effort | null = null;
 // a long transcript) since there is no retry path to fall back on — a too-tight
 // timeout would surface as a hard failure instead of a slow-but-correct score.
 export const JUDGE_TIMEOUT_MS = 600_000;
+
+// Length caps the judge model output is held to. Three places must agree —
+// the Zod schema (post-parse rejection), the JSON schema sent to the CLI
+// (pre-emit enforcement), and the prompt text the judge model reads. Drift
+// silently rejects valid output (Zod tighter than JSON schema) or surfaces
+// invalid output (Zod looser).
+export const JUDGE_RATIONALE_PER_CRITERION_MAX = 300;
+export const JUDGE_RATIONALE_UMBRELLA_MAX = 1200;
+export const JUDGE_WARNING_MESSAGE_MAX = 200;
 
 // Maps either a CLI alias (`opus`, `sonnet`, `haiku`) or a concrete pinned ID
 // (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`) onto its

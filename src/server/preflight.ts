@@ -4,7 +4,14 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathExists, atomicWriteFile, ensureDir, readJsonIfExists } from './fsUtil.js';
-import { PROJECT_INFO_FILE, PROJECTS_DIR_NAME, STORAGE_DIR_NAME } from '@shared/constants.js';
+import {
+  GITIGNORE_FILE,
+  LOCK_FILE,
+  PROJECT_INFO_FILE,
+  PROJECTS_DIR_NAME,
+  RUN_CONFIG_FILE,
+  STORAGE_DIR_NAME,
+} from '@shared/constants.js';
 import { readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import lockfile from 'proper-lockfile';
 import { log } from './log.js';
@@ -31,6 +38,11 @@ export interface PreflightResult {
 // Users can always reclaim manually via the hint in `instance-running`.
 const LOCK_STALE_MS = 5 * 60_000;
 
+// Per-call ceiling on the `claude --version` / `--help` probes. The CLI
+// answers in well under a second on a healthy box; a 5s budget tolerates
+// a momentarily slow disk or fork without making preflight feel hung.
+const CLAUDE_BIN_PROBE_TIMEOUT_MS = 5_000;
+
 export class PreflightError extends Error {
   code: string;
   hint: string | undefined;
@@ -52,7 +64,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   // session, or run history. The cwd-inside-storage guard above still uses
   // the global root so a user can't run mdredd from inside `~/.mdredd/`.
   const storageRoot = join(globalRoot, PROJECTS_DIR_NAME, projectKey(input.cwd));
-  const lockFilePath = join(storageRoot, '.lock');
+  const lockFilePath = join(storageRoot, LOCK_FILE);
   await ensureDir(storageRoot);
   await ensureAutoGitignore(globalRoot);
   await writeProjectInfo(storageRoot, input.cwd);
@@ -86,7 +98,9 @@ async function writeProjectInfo(storageRoot: string, cwd: string): Promise<void>
 
 async function checkClaudeCli(bin: string): Promise<void> {
   try {
-    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(bin, ['--version'], {
+      timeout: CLAUDE_BIN_PROBE_TIMEOUT_MS,
+    });
     const trimmed = stdout.trim();
     log.info('preflight.claude-version', { version: trimmed });
   } catch {
@@ -98,7 +112,9 @@ async function checkClaudeCli(bin: string): Promise<void> {
   }
 
   try {
-    const { stdout } = await execFileAsync(bin, ['--help'], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(bin, ['--help'], {
+      timeout: CLAUDE_BIN_PROBE_TIMEOUT_MS,
+    });
     const required = [
       '--output-format',
       '--include-partial-messages',
@@ -156,9 +172,9 @@ async function cwdGuard(cwd: string, storageRoot: string): Promise<void> {
 }
 
 async function ensureAutoGitignore(storageRoot: string): Promise<void> {
-  const gitignorePath = join(storageRoot, '.gitignore');
+  const gitignorePath = join(storageRoot, GITIGNORE_FILE);
   if (await pathExists(gitignorePath)) return;
-  await atomicWriteFile(gitignorePath, '*\n!.gitignore\n');
+  await atomicWriteFile(gitignorePath, `*\n!${GITIGNORE_FILE}\n`);
 }
 
 function lockMetaPath(lockFilePath: string): string {
@@ -346,7 +362,7 @@ async function recoverAbandonedRuns(storageRoot: string): Promise<void> {
   const entries = await readdir(storageRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const configPath = join(storageRoot, entry.name, 'config.json');
+    const configPath = join(storageRoot, entry.name, RUN_CONFIG_FILE);
     let cfg;
     try {
       cfg = JSON.parse(await readFile(configPath, 'utf8'));

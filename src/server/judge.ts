@@ -7,6 +7,8 @@ import JSON5 from 'json5';
 import {
   JUDGE_MODEL,
   JUDGE_PROMPT_CAP_BYTES,
+  JUDGE_RATIONALE_PER_CRITERION_MAX,
+  JUDGE_RATIONALE_UMBRELLA_MAX,
   JUDGE_VARIANT_CAP_BYTES,
   JUDGE_FINAL_MESSAGE_CAP_BYTES,
   JUDGE_TOOL_SUMMARY_CAP_CHARS,
@@ -14,6 +16,7 @@ import {
   JUDGE_OUTPUT_FILE_CAP_BYTES,
   JUDGE_OUTPUTS_TOTAL_CAP_BYTES,
   JUDGE_TIMEOUT_MS,
+  RUN_JUDGE_FILE,
   STREAM_TOOL_ARGS_CAP_CHARS,
   STREAM_TOOL_RESULT_CAP_CHARS,
   defaultEffortForModel,
@@ -126,7 +129,7 @@ export async function runJudge(input: JudgeInput, opts: RunJudgeOptions = {}): P
       error: (err as Error).message,
     };
   }
-  await atomicWriteJson(join(input.runDir, 'judge.json'), file);
+  await atomicWriteJson(join(input.runDir, RUN_JUDGE_FILE), file);
   // Best-effort: a missing or malformed attempts file is observability data, not
   // control flow, so persistence failures must not mask the real judge result.
   if (attempts.length > 0) {
@@ -192,12 +195,12 @@ const STATIC_RUBRIC = [
   `Output strictly a JSON object of the shape:`,
   `  { "scores": { "accuracy": N, "completeness": N, "adherence": N, "clarity": N },`,
   `    "scoreRationales": {`,
-  `      "accuracy":     "≤ 300 chars: why this band; if ungradeable, name the harness limit",`,
-  `      "completeness": "≤ 300 chars: why this band and not the band above or below",`,
-  `      "adherence":    "≤ 300 chars: why this band and not the band above or below",`,
-  `      "clarity":      "≤ 300 chars: why this band and not the band above or below"`,
+  `      "accuracy":     "≤ ${JUDGE_RATIONALE_PER_CRITERION_MAX} chars: why this band; if ungradeable, name the harness limit",`,
+  `      "completeness": "≤ ${JUDGE_RATIONALE_PER_CRITERION_MAX} chars: why this band and not the band above or below",`,
+  `      "adherence":    "≤ ${JUDGE_RATIONALE_PER_CRITERION_MAX} chars: why this band and not the band above or below",`,
+  `      "clarity":      "≤ ${JUDGE_RATIONALE_PER_CRITERION_MAX} chars: why this band and not the band above or below"`,
   `    },`,
-  `    "rationale": "one paragraph, ≤ 1200 characters, calling out what drove each score",`,
+  `    "rationale": "one paragraph, ≤ ${JUDGE_RATIONALE_UMBRELLA_MAX} characters, calling out what drove each score",`,
   `    "ungradeable": { "accuracy"?: boolean, "completeness"?: boolean, "adherence"?: boolean, "clarity"?: boolean } }`,
   `where each N is one of 0, 25, 50, 75, 100. Rationale form is criterion-state-dependent — pick exactly one:`,
   `  - GRADEABLE → start with the band, e.g. "75 not 100 because <gap>" or "50 not 75 because <gap>". Justify the chosen band against neighbors.`,

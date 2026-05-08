@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import type { Mode, VariantType } from '@shared/schemas/types.js';
+import { RUN_VARIANT_FILE } from '@shared/constants.js';
 import { atomicWriteJson, ensureDir, loadGitignore, pathExists } from './fsUtil.js';
 import { log } from './log.js';
 
@@ -86,7 +87,7 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
 
   await placeVariant(projectDir, input);
   // Durable snapshot of the exact bytes we ran against, for judge input and audit.
-  await writeFile(join(runDir, 'variant.md'), input.variantContent, 'utf8');
+  await writeFile(join(runDir, RUN_VARIANT_FILE), input.variantContent, 'utf8');
 
   let settingsPath: string | null = null;
   if (input.mode === 'write') {

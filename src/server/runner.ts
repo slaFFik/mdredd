@@ -13,6 +13,9 @@ import {
   DEFAULT_TURN_CAP,
   DEFAULT_WALLCLOCK_CAP_MS,
   READ_ONLY_TOOLS,
+  RUN_CONFIG_FILE,
+  RUN_TRANSCRIPT_FILE,
+  RUN_TRANSCRIPT_NDJSON_FILE,
   WRITE_TOOLS,
   effortLevelsForModel,
   type Effort,
@@ -123,7 +126,7 @@ export class Runner extends EventEmitter {
     // is buffered like the other log streams (no fsync); the on-disk prefix
     // converges within a few ms of each emit, which is enough to keep
     // /api/state useful across page refreshes.
-    this.transcriptLog = createWriteStream(join(this.input.runDir, 'transcript.ndjson'), {
+    this.transcriptLog = createWriteStream(join(this.input.runDir, RUN_TRANSCRIPT_NDJSON_FILE), {
       flags: 'a',
     });
     // Defensive error handlers: an EBADF / ENOSPC mid-run would otherwise
@@ -348,7 +351,7 @@ export class Runner extends EventEmitter {
           wallClockMs: cfg.wallClockMs,
           truncationReason: cfg.truncationReason,
         };
-        await atomicWriteJson(join(this.input.runDir, 'transcript.json'), transcript);
+        await atomicWriteJson(join(this.input.runDir, RUN_TRANSCRIPT_FILE), transcript);
         await this.persistConfig();
 
         const outputs = await this.listOutputs();
@@ -365,7 +368,7 @@ export class Runner extends EventEmitter {
   }
 
   private async persistConfig(): Promise<void> {
-    await atomicWriteJson(join(this.input.runDir, 'config.json'), this.input.initialConfig);
+    await atomicWriteJson(join(this.input.runDir, RUN_CONFIG_FILE), this.input.initialConfig);
   }
 
   /**

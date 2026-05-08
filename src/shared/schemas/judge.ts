@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  JUDGE_RATIONALE_PER_CRITERION_MAX,
+  JUDGE_RATIONALE_UMBRELLA_MAX,
+  JUDGE_WARNING_MESSAGE_MAX,
+} from '../constants.js';
 import { TokenUsageSchema } from './run.js';
 
 export const RUBRIC_BANDS = [0, 25, 50, 75, 100] as const;
@@ -21,10 +26,10 @@ export const JudgeScoresSchema = z.object({
 export type JudgeScores = z.infer<typeof JudgeScoresSchema>;
 
 export const ScoreRationalesSchema = z.object({
-  accuracy: z.string().min(1).max(300),
-  completeness: z.string().min(1).max(300),
-  adherence: z.string().min(1).max(300),
-  clarity: z.string().min(1).max(300),
+  accuracy: z.string().min(1).max(JUDGE_RATIONALE_PER_CRITERION_MAX),
+  completeness: z.string().min(1).max(JUDGE_RATIONALE_PER_CRITERION_MAX),
+  adherence: z.string().min(1).max(JUDGE_RATIONALE_PER_CRITERION_MAX),
+  clarity: z.string().min(1).max(JUDGE_RATIONALE_PER_CRITERION_MAX),
 });
 export type ScoreRationales = z.infer<typeof ScoreRationalesSchema>;
 
@@ -43,10 +48,11 @@ export type Ungradeable = z.infer<typeof UngradeableSchema>;
 export const JudgeModelOutputSchema = z.object({
   scores: JudgeScoresSchema,
   scoreRationales: ScoreRationalesSchema,
-  // 1200 chars (M8): the prior 600 cap routinely truncated the umbrella when
-  // 2-3 criteria were ungradeable and the rationale carried most of the
-  // explanation. Doubling gives breathing room without bloating the prompt.
-  rationale: z.string().min(1).max(1200),
+  // The prior 600-char cap routinely truncated the umbrella when 2–3 criteria
+  // were ungradeable and the rationale carried most of the explanation; the
+  // current value (JUDGE_RATIONALE_UMBRELLA_MAX) doubles that without bloating
+  // the prompt.
+  rationale: z.string().min(1).max(JUDGE_RATIONALE_UMBRELLA_MAX),
   ungradeable: UngradeableSchema.optional(),
 });
 export type JudgeModelOutput = z.infer<typeof JudgeModelOutputSchema>;
@@ -62,7 +68,7 @@ export type JudgeWarningKind = z.infer<typeof JudgeWarningKindSchema>;
 export const JudgeWarningSchema = z.object({
   criterion: z.enum(['accuracy', 'completeness', 'adherence', 'clarity']),
   kind: JudgeWarningKindSchema,
-  message: z.string().min(1).max(200),
+  message: z.string().min(1).max(JUDGE_WARNING_MESSAGE_MAX),
 });
 export type JudgeWarning = z.infer<typeof JudgeWarningSchema>;
 
@@ -158,13 +164,17 @@ export const JUDGE_MODEL_JSON_SCHEMA = {
       additionalProperties: false,
       required: ['accuracy', 'completeness', 'adherence', 'clarity'],
       properties: {
-        accuracy: { type: 'string', maxLength: 300, minLength: 1 },
-        completeness: { type: 'string', maxLength: 300, minLength: 1 },
-        adherence: { type: 'string', maxLength: 300, minLength: 1 },
-        clarity: { type: 'string', maxLength: 300, minLength: 1 },
+        accuracy: { type: 'string', maxLength: JUDGE_RATIONALE_PER_CRITERION_MAX, minLength: 1 },
+        completeness: {
+          type: 'string',
+          maxLength: JUDGE_RATIONALE_PER_CRITERION_MAX,
+          minLength: 1,
+        },
+        adherence: { type: 'string', maxLength: JUDGE_RATIONALE_PER_CRITERION_MAX, minLength: 1 },
+        clarity: { type: 'string', maxLength: JUDGE_RATIONALE_PER_CRITERION_MAX, minLength: 1 },
       },
     },
-    rationale: { type: 'string', maxLength: 1200, minLength: 1 },
+    rationale: { type: 'string', maxLength: JUDGE_RATIONALE_UMBRELLA_MAX, minLength: 1 },
     ungradeable: {
       type: 'object',
       additionalProperties: false,

@@ -2,6 +2,7 @@ import { mkdir, rename, writeFile, readFile, realpath, stat } from 'node:fs/prom
 import { randomBytes } from 'node:crypto';
 import { dirname, join, resolve, sep } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
+import { GITIGNORE_FILE } from '@shared/constants.js';
 import { log } from './log.js';
 
 export async function ensureDir(path: string): Promise<void> {
@@ -107,7 +108,7 @@ export async function realpathWithinBase(
  * operation that's incidentally consulting it.
  */
 export async function loadGitignore(dir: string): Promise<Ignore | null> {
-  const gitignorePath = join(dir, '.gitignore');
+  const gitignorePath = join(dir, GITIGNORE_FILE);
   let raw: string;
   try {
     raw = await readFile(gitignorePath, 'utf8');
