@@ -1,6 +1,6 @@
 {
   "name": "mdredd",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A/B test your Claude Code instruction files.",
   "keywords": [
     "ab-testing",
