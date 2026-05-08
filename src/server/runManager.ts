@@ -412,7 +412,18 @@ export class RunManager extends EventEmitter {
         reason: cfg.truncationReason ?? cfg.errorMessage ?? undefined,
       } as Omit<ServerSseEvent, 'seq'>);
       if (sessionSnap.judgeEnabled && (cfg.status === 'completed' || cfg.status === 'truncated')) {
-        void this.fireJudge(columnId, cfg, slug.folderName);
+        // Zero turns means the model never streamed (e.g. `claude -p` returning
+        // "Unknown command: /foo" with num_turns=0). Firing the judge would bill
+        // tokens to score an empty transcript and surface a misleading score.
+        if (cfg.turnCount > 0) {
+          void this.fireJudge(columnId, cfg, slug.folderName);
+        } else {
+          log.info('runManager.judge-skipped-zero-turns', {
+            columnId,
+            runFolder: slug.folderName,
+            status: cfg.status,
+          });
+        }
       }
     });
 

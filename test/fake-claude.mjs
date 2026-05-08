@@ -17,6 +17,9 @@
  *                                       — synthesize a Write tool_use targeting ../outputs/<N> and
  *                                         actually create that file (the real claude would have
  *                                         done it via its Write tool implementation)
+ *   FAKE_CLAUDE_SCENARIO=zero-turns     — system init + result with num_turns=0; no assistant
+ *                                         message_start/stop pair (mimics `claude -p` returning
+ *                                         "Unknown command: /foo" before reaching the model)
  *
  * Flags are intentionally ignored (except --json-schema which causes an early JSON result).
  */
@@ -411,6 +414,11 @@ async function runWriteOutput() {
   emitResult({ numTurns: 1, result: `wrote ${name}` });
 }
 
+async function runZeroTurns() {
+  emitSystemInit();
+  emitResult({ numTurns: 0, result: `Unknown command: ${prompt.slice(0, 40)}` });
+}
+
 async function runPermissionDenied() {
   emitSystemInit();
   emitMessageStart();
@@ -460,6 +468,9 @@ async function main() {
         break;
       case 'write-output':
         await runWriteOutput();
+        break;
+      case 'zero-turns':
+        await runZeroTurns();
         break;
       default:
         stderr.write(`fake-claude: unknown scenario "${scenario}"\n`);

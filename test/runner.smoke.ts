@@ -5,6 +5,7 @@ import { Runner } from '../src/server/runner.js';
 import { RunManager } from '../src/server/runManager.js';
 import { SessionStore } from '../src/server/session.js';
 import { buildSandbox } from '../src/server/sandbox.js';
+import { pathExists } from '../src/server/fsUtil.js';
 import type { RunConfig } from '@shared/schemas/run.js';
 
 const fakeBin = new URL('./fake-claude.mjs', import.meta.url).pathname;
@@ -670,6 +671,66 @@ await scenario(
     }
   },
 );
+
+await scenario('zero-turn run: judge is skipped and judge.json is never written', async () => {
+  // `claude -p` can return with num_turns=0 (e.g. when the prompt resolves to
+  // an unknown slash command). There is nothing for the judge to grade, so
+  // RunManager must not fire it — otherwise the harness bills tokens to score
+  // an empty transcript and surfaces a misleading score.
+  const cwd = await mkdtemp(join(tmpdir(), 'mdredd-zero-turns-'));
+  const storageRoot = join(cwd, 'agents', 'mdredd');
+  const savedScenario = process.env.FAKE_CLAUDE_SCENARIO;
+  process.env.FAKE_CLAUDE_SCENARIO = 'zero-turns';
+  try {
+    const session = await SessionStore.load(storageRoot, cwd);
+    await session.mutate((s) => {
+      const col = s.columns[0]!;
+      col.variantName = 'zero-turn-variant'; // explicit name skips the haiku slug spawn
+      col.variantContent = '# variant\n';
+      col.prompt = '/finalize wrap up';
+    });
+    // Sanity-check the default — the gate matters only when judging is on.
+    if (!session.snapshot.judgeEnabled) {
+      throw new Error('expected judgeEnabled=true by default');
+    }
+    const runManager = new RunManager({ claudeBin: fakeBin, cwd, storageRoot, session });
+    await runManager.init();
+
+    const cfg = await runManager.startColumn('col-1');
+    const deadline = Date.now() + 10_000;
+    while (runManager.isColumnActive('col-1')) {
+      if (Date.now() > deadline) throw new Error('run did not finalize within 10s');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    // fireJudge is scheduled via `void` from the 'ended' handler. Sleep so any
+    // (incorrectly fired) judge subprocess has time to land judge.json on disk
+    // before we assert it doesn't exist.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const finalCfg = JSON.parse(
+      await readFile(join(storageRoot, cfg.runFolder, 'config.json'), 'utf8'),
+    ) as { status: string; turnCount: number };
+    if (finalCfg.status !== 'completed') {
+      throw new Error(`expected completed, got ${finalCfg.status}`);
+    }
+    if (finalCfg.turnCount !== 0) {
+      throw new Error(`expected turnCount=0, got ${finalCfg.turnCount}`);
+    }
+    const tx = JSON.parse(
+      await readFile(join(storageRoot, cfg.runFolder, 'transcript.json'), 'utf8'),
+    ) as { events: unknown[] };
+    if (tx.events.length !== 0) {
+      throw new Error(`expected empty events, got ${tx.events.length}`);
+    }
+    if (await pathExists(join(storageRoot, cfg.runFolder, 'judge.json'))) {
+      throw new Error('judge.json should not exist on a zero-turn run');
+    }
+  } finally {
+    if (savedScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+    else process.env.FAKE_CLAUDE_SCENARIO = savedScenario;
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 await scenario('transcript.ndjson: events are appended incrementally during the run', async () => {
   await withSandbox(
