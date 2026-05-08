@@ -33,6 +33,19 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 export const WRITE_TOOLS = [...READ_ONLY_TOOLS, 'Write', 'Edit'];
 
+// Appended to the child's system prompt via `--append-system-prompt` whenever
+// `mode === 'write'`. The sandbox's `.claude/settings.json` already denies
+// Write/Edit outside `../outputs/**`, but without this nudge models often
+// recognize the deny rule and bail out ("I cannot apply these fixes") instead
+// of writing modified copies into the outputs dir. The text directs them to
+// mirror the source path under `../outputs/` and write FULL files, so the user
+// can diff the outputs tree against the source after the run.
+export const WRITE_MODE_SYSTEM_PROMPT = [
+  'You are running in a sandboxed A/B testing harness. Write and Edit are denied for any path inside your cwd; only `../outputs/` is writable. Do not attempt in-place edits to files in cwd — they will fail.',
+  'To "modify" a file at relative path REL (e.g. `src/foo.ts`), write the FULL modified contents to `../outputs/REL` (e.g. `../outputs/src/foo.ts`). Mirror the source path exactly so the user can diff `../outputs/` against the source tree after the run.',
+  'Always write complete files, never patches or diffs. Read freely from cwd; write only under `../outputs/`.',
+].join('\n\n');
+
 // Pin to a concrete model ID, not the `haiku` CLI alias: aliases can be
 // repointed to a future generation or removed, which would silently shift
 // score baselines or break the judge entirely (issue #13). Bump manually

@@ -16,6 +16,7 @@ import {
   RUN_CONFIG_FILE,
   RUN_TRANSCRIPT_FILE,
   RUN_TRANSCRIPT_NDJSON_FILE,
+  WRITE_MODE_SYSTEM_PROMPT,
   WRITE_TOOLS,
   effortLevelsForModel,
   type Effort,
@@ -427,6 +428,11 @@ export class Runner extends EventEmitter {
       'project',
       '--disable-slash-commands',
     ];
+    // Write mode: nudge the child to mirror source paths under ../outputs/
+    // instead of bailing on the sandbox's Write(**)/Edit(**) deny rule.
+    if (this.input.mode === 'write') {
+      args.push('--append-system-prompt', WRITE_MODE_SYSTEM_PROMPT);
+    }
     // Last line of defence: only emit --effort if the value is valid for the
     // model. The route layer already normalizes on PATCH, but Runner can be
     // constructed directly (tests, future code paths), so the invariant

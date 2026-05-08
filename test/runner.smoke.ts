@@ -1247,4 +1247,55 @@ await scenario(
   },
 );
 
+await scenario(
+  'write mode: appends system prompt directing outputs to ../outputs/<rel>',
+  async () => {
+    for (const mode of ['write', 'read-only'] as const) {
+      await withSandbox(
+        `append-system-${mode}`,
+        async ({ runDir, projectDir, outputsDir, initialConfig }) => {
+          const dumpPath = join(runDir, 'argv.txt');
+          const runner = new Runner({
+            claudeBin: fakeBin,
+            projectDir,
+            runDir,
+            outputsDir,
+            prompt: 'go',
+            model: 'haiku',
+            mode,
+            initialConfig,
+            env: {
+              ...process.env,
+              FAKE_CLAUDE_SCENARIO: 'happy',
+              FAKE_CLAUDE_DUMP_ARGS: dumpPath,
+            },
+          });
+          await runner.start();
+          await runner.wait();
+          const argv = (await readFile(dumpPath, 'utf8')).split('\n');
+          const idx = argv.indexOf('--append-system-prompt');
+          if (mode === 'write') {
+            if (idx < 0) {
+              throw new Error(
+                `write mode: expected --append-system-prompt in argv, got: ${argv.join(' ')}`,
+              );
+            }
+            const text = argv[idx + 1] ?? '';
+            if (!text.includes('../outputs/')) {
+              throw new Error(
+                `write mode: appended system prompt should mention ../outputs/, got: ${text}`,
+              );
+            }
+          } else if (idx >= 0) {
+            throw new Error(
+              `read-only mode: --append-system-prompt should be absent, got: ${argv.join(' ')}`,
+            );
+          }
+        },
+        { mode },
+      );
+    }
+  },
+);
+
 console.log('\nAll runner smoke scenarios passed.');

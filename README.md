@@ -27,7 +27,7 @@ MDredd runs two or three versions of the same instruction file in parallel — e
 - Run `mdredd` from any project directory
 - A browser UI opens locally with two variant columns (add a third with `+`)
 - Paste or pick instruction-file variants; write a prompt per column; click Run
-- Variants run with a read-only tool allowlist by default — your source files stay untouched. A Write mode lets variants produce files into a per-run folder, still without modifying your source
+- Variants run with a read-only tool allowlist by default — your source files stay untouched. A Write mode lets variants produce files into a per-run `outputs/` folder, still without modifying your source. The harness directs the model to mirror source paths there (modifying `src/foo.ts` produces `outputs/src/foo.ts`, with the full modified file contents) so you can diff `outputs/` against your source after the run
 - Results stream live; judge scores appear once runs complete
 
 ## Requirements
@@ -60,7 +60,7 @@ Each variant run gets its own sandbox under `~/.mdredd/projects/<projectKey>/<ru
 │   ├── .claude/skills/<name>/SKILL.md   ← (skill variants)
 │   ├── .claude/agents/<name>.md         ← (agent variants)
 │   └── <top-level entries>      ← hardlinked from your project, see below
-├── outputs/                     ← write target in Write mode; empty in read-only
+├── outputs/                     ← write target in Write mode (model mirrors source paths here); empty in read-only
 ├── variant.md                   ← exact bytes of the variant we ran
 ├── config.json                  ← run config + token usage + cost
 ├── init.json                    ← child's `system init` payload (audit trail)
