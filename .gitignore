@@ -11,3 +11,4 @@ coverage
 .claude/settings.local.json
 .claude/.DS_Store
 .claude/skills/.DS_Store
+.clawpatch/

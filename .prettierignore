@@ -4,4 +4,5 @@ coverage
 .vite
 package-lock.json
 /.claude
+/.clawpatch
 /agents
