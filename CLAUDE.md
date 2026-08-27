@@ -24,7 +24,7 @@ npm run lint          # eslint .
 npm run format        # prettier --write .
 npm run format:check  # prettier --check .
 
-npm test              # judge + preflight + runner + sandbox + security + routes + slug specs (in that order)
+npm test                  # judge + preflight + runner + sandbox + security + routes + slug + bin specs (in that order)
 npm run test:judge        # tsx test/judge.spec.ts
 npm run test:preflight    # tsx test/preflight.spec.ts
 npm run test:runner       # tsx test/runner.smoke.ts
@@ -32,13 +32,14 @@ npm run test:sandbox      # tsx test/sandbox.spec.ts
 npm run test:security     # tsx test/security.spec.ts
 npm run test:routes       # tsx test/routes.spec.ts
 npm run test:slug         # tsx test/slug.spec.ts
+npm run test:bin          # tsx test/bin.spec.ts
 ```
 
 ### Environment and CLI flags
 
 - `CLAUDE_BIN` — path to the `claude` binary. Defaults to `claude` (resolved via PATH). Point this at `test/fake-claude.mjs` to drive the runner deterministically without spending tokens.
 - `MDREDD_LOG_LEVEL` — `debug` | `info` (default) | `warn` | `error`. Server-only; logs go to stdout (info/debug) or stderr (warn/error).
-- `bin/mdredd.js` takes no flags. mdredd runs from any cwd except `~`, `/`, `/root`, or inside `~/.mdredd/`. The browser opens automatically on first launch and is suppressed on tsx-watch hot restarts via `~/.mdredd/.dev-open-marker`.
+- `bin/mdredd.js` takes a single flag: `--version` prints the `package.json` version and exits. It's handled before the `dist/` existence check, so it works on an unbuilt checkout and never boots the server. mdredd runs from any cwd except `~`, `/`, `/root`, or inside `~/.mdredd/`. The browser opens automatically on first launch and is suppressed on tsx-watch hot restarts via `~/.mdredd/.dev-open-marker`.
 
 Tests are plain tsx scripts, not a framework. Each file declares scenarios via a local `scenario(name, fn)` helper and exits non-zero on failure. To run a single scenario, edit the file's queue or comment out the others — there's no `--grep`. Most server tests use `test/fake-claude.mjs` (a stand-in for the real `claude` CLI) selected via `FAKE_CLAUDE_SCENARIO` env vars.
 
@@ -46,7 +47,7 @@ Tests are plain tsx scripts, not a framework. Each file declares scenarios via a
 
 ### Layout
 
-- `bin/mdredd.js` — published entry point. Refuses to run without `dist/`; tells users to `npm run build`.
+- `bin/mdredd.js` — published entry point. Handles `--version`, then refuses to run without `dist/`; tells users to `npm run build`.
 - `src/server/` — Node `http` server (no Express/Fastify). Owns preflight, sandboxing, child-process spawning, stream parsing, judge runs, SSE fan-out, and the static-asset fallback for the SPA.
 - `src/web/` — React 19 + Vite SPA. Communicates with the server over REST + an `EventSource` SSE stream. Same-origin only — no token plumbing; the server enforces auth via the Host + Origin headers (see "Authentication" below).
 - `src/shared/` — Zod schemas (`schemas/`) and constants used by both. Imported as `@shared/*` (path alias).
@@ -98,7 +99,7 @@ Storage is scoped per project: `~/.mdredd/projects/<projectKey>/` where `project
 
 ## CI
 
-`.github/workflows/ci.yml` runs four jobs in parallel on Node 22.13.x: `lint` (eslint + prettier check), `typecheck`, `build`, `test` (preflight, judge, runner, sandbox, security, routes, slug specs — all run sequentially in one job). All four must pass for the `ci-success` gate. CI only triggers when paths under `src/`, `test/`, `bin/`, build configs, or the workflow itself change — README/doc-only commits skip CI.
+`.github/workflows/ci.yml` runs four jobs in parallel on Node 22.13.x: `lint` (eslint + prettier check), `typecheck`, `build`, `test` (preflight, judge, runner, sandbox, security, routes, slug, bin specs — all run sequentially in one job). All four must pass for the `ci-success` gate. CI only triggers when paths under `src/`, `test/`, `bin/`, build configs, or the workflow itself change — README/doc-only commits skip CI.
 
 ## Releasing
 

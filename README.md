@@ -44,7 +44,7 @@ You don't need an API key — MDredd piggybacks on your existing Claude Code aut
 npm install -g mdredd
 ```
 
-Once installed, run `mdredd` from any project directory. To update later, re-run the same command.
+Once installed, run `mdredd` from any project directory. To update later, re-run the same command. `mdredd --version` prints the installed version.
 
 ## How isolation works
 

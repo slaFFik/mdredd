@@ -41,14 +41,15 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "start": "node dist/server/index.js",
-    "test": "npm run test:judge && npm run test:preflight && npm run test:runner && npm run test:sandbox && npm run test:security && npm run test:routes && npm run test:slug",
+    "test": "npm run test:judge && npm run test:preflight && npm run test:runner && npm run test:sandbox && npm run test:security && npm run test:routes && npm run test:slug && npm run test:bin",
     "test:runner": "tsx test/runner.smoke.ts",
     "test:judge": "tsx test/judge.spec.ts",
     "test:preflight": "tsx test/preflight.spec.ts",
     "test:sandbox": "tsx test/sandbox.spec.ts",
     "test:security": "tsx test/security.spec.ts",
     "test:routes": "tsx test/routes.spec.ts",
-    "test:slug": "tsx test/slug.spec.ts"
+    "test:slug": "tsx test/slug.spec.ts",
+    "test:bin": "tsx test/bin.spec.ts"
   },
   "engines": {
     "node": ">=22.13.0"
