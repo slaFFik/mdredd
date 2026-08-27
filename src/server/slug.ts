@@ -88,7 +88,9 @@ export function deriveSlug(input: SlugInput, existingFolderNames: Set<string>): 
 export async function listRunFolderNames(storageRoot: string): Promise<Set<string>> {
   if (!(await pathExists(storageRoot))) return new Set();
   const entries = await readdir(storageRoot, { withFileTypes: true });
-  return new Set(
-    entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name),
-  );
+  const out = new Set<string>();
+  for (const e of entries) {
+    if (e.isDirectory() && !e.name.startsWith('.')) out.add(e.name);
+  }
+  return out;
 }

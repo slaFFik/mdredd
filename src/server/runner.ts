@@ -355,10 +355,12 @@ export class Runner extends EventEmitter {
           wallClockMs: cfg.wallClockMs,
           truncationReason: cfg.truncationReason,
         };
+        // Transcript before config: if this write fails, config.json must keep
+        // its pre-terminal status so the next boot reaps the run as errored,
+        // rather than presenting a "completed" run whose transcript is only
+        // the partial-ndjson prefix.
         await atomicWriteJson(join(this.input.runDir, RUN_TRANSCRIPT_FILE), transcript);
-        await this.persistConfig();
-
-        const outputs = await this.listOutputs();
+        const [, outputs] = await Promise.all([this.persistConfig(), this.listOutputs()]);
         this.emit('outputs', outputs);
 
         this.emit('ended', cfg);

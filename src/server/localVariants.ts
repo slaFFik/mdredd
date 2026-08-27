@@ -7,53 +7,58 @@ const MAX_BYTES = 256 * 1024; // cap individual variants to avoid loading huge f
 
 export async function listLocalSkills(cwd: string): Promise<LocalVariant[]> {
   const dir = join(cwd, '.claude', 'skills');
-  const out: LocalVariant[] = [];
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     log.warn('localVariants.skills-readdir-failed', { error: (err as Error).message });
-    return out;
+    return [];
   }
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const skillPath = join(dir, entry.name, 'SKILL.md');
-    try {
-      const content = await readFile(skillPath, 'utf8');
-      if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) continue;
-      out.push({ name: entry.name, content, path: skillPath });
-    } catch {
-      // no SKILL.md in this dir — skip
-    }
-  }
+  const candidates = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+  const settled = await Promise.all(
+    candidates.map(async (entry): Promise<LocalVariant | null> => {
+      const skillPath = join(dir, entry.name, 'SKILL.md');
+      try {
+        const content = await readFile(skillPath, 'utf8');
+        if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) return null;
+        return { name: entry.name, content, path: skillPath };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const out = settled.filter((v): v is LocalVariant => v !== null);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
 export async function listLocalAgents(cwd: string): Promise<LocalVariant[]> {
   const dir = join(cwd, '.claude', 'agents');
-  const out: LocalVariant[] = [];
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     log.warn('localVariants.agents-readdir-failed', { error: (err as Error).message });
-    return out;
+    return [];
   }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.')) continue;
-    const agentPath = join(dir, entry.name);
-    try {
-      const content = await readFile(agentPath, 'utf8');
-      if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) continue;
-      const name = entry.name.slice(0, -3);
-      out.push({ name, content, path: agentPath });
-    } catch {
-      // skip
-    }
-  }
+  const candidates = entries.filter(
+    (e) => e.isFile() && e.name.endsWith('.md') && !e.name.startsWith('.'),
+  );
+  const settled = await Promise.all(
+    candidates.map(async (entry): Promise<LocalVariant | null> => {
+      const agentPath = join(dir, entry.name);
+      try {
+        const content = await readFile(agentPath, 'utf8');
+        if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) return null;
+        return { name: entry.name.slice(0, -3), content, path: agentPath };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const out = settled.filter((v): v is LocalVariant => v !== null);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }

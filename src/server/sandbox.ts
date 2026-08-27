@@ -66,16 +66,17 @@ export async function buildSandbox(input: SandboxInput): Promise<SandboxResult> 
   const projectDir = join(runDir, 'project');
   const outputsDir = join(runDir, 'outputs');
 
-  await ensureDir(projectDir);
-  await ensureDir(outputsDir);
+  await Promise.all([ensureDir(projectDir), ensureDir(outputsDir)]);
   await plantSandboxGitDir(projectDir);
 
-  const cwdReal = await realpath(input.cwd);
-  const storageRootReal = await realpath(input.storageRoot);
+  const [cwdReal, storageRootReal, globalIgnore, rootIgnore] = await Promise.all([
+    realpath(input.cwd),
+    realpath(input.storageRoot),
+    loadGlobalGitignore(),
+    loadGitignore(input.cwd),
+  ]);
   const ignoreChain: IgnoreLayer[] = [];
-  const globalIgnore = await loadGlobalGitignore();
   if (globalIgnore) ignoreChain.push({ prefix: '', ig: globalIgnore });
-  const rootIgnore = await loadGitignore(input.cwd);
   if (rootIgnore) ignoreChain.push({ prefix: '', ig: rootIgnore });
 
   const mirror = new Mirror({

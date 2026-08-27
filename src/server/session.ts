@@ -99,17 +99,21 @@ export class SessionStore {
   }
 
   async assembleSnapshot(): Promise<SessionSnapshot> {
-    const runs: Record<string, RunBundle> = {};
     // Load only the run bundles each column points at. session.json is the
     // single source of truth for which runs are visible — the harness deletes
     // the prior folder on re-run, and orphans (from older mdredd builds or
     // external edits) stay invisible by design.
-    for (const col of this.session.columns) {
-      const folder = col.currentRunFolder;
-      if (!folder || runs[folder]) continue;
-      const bundle = await this.readRunBundle(folder);
-      if (bundle) runs[folder] = bundle;
-    }
+    const folders = Array.from(
+      new Set(
+        this.session.columns.map((c) => c.currentRunFolder).filter((f): f is string => Boolean(f)),
+      ),
+    );
+    const bundles = await Promise.all(folders.map((f) => this.readRunBundle(f)));
+    const runs: Record<string, RunBundle> = {};
+    folders.forEach((f, i) => {
+      const b = bundles[i];
+      if (b) runs[f] = b;
+    });
     return { session: this.snapshot, runs };
   }
 
@@ -125,8 +129,10 @@ export class SessionStore {
     if (!transcript) {
       transcript = await readPartialTranscript(runDir, config);
     }
-    const judge = await readJsonIfExists<JudgeFile>(join(runDir, RUN_JUDGE_FILE));
-    const outputs = await this.listOutputs(join(runDir, 'outputs'));
+    const [judge, outputs] = await Promise.all([
+      readJsonIfExists<JudgeFile>(join(runDir, RUN_JUDGE_FILE)),
+      this.listOutputs(join(runDir, 'outputs')),
+    ]);
     return { config, transcript, judge, outputs };
   }
 

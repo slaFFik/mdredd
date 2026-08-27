@@ -282,8 +282,10 @@ async function reclaimOrFail(
   lockFilePath: string,
   metaPath: string,
 ): Promise<() => Promise<void>> {
-  const meta = await readJsonIfExists<LockMeta>(metaPath);
-  const lockStat = await stat(lockFilePath).catch(() => null);
+  const [meta, lockStat] = await Promise.all([
+    readJsonIfExists<LockMeta>(metaPath),
+    stat(lockFilePath).catch(() => null),
+  ]);
   // Only reclaim when (a) the meta is bound to the *current* lock dir via
   // its inode AND (b) the recorded pid is dead. Either side missing means
   // the meta is either stale-from-a-previous-owner or the lock is held by

@@ -88,25 +88,27 @@ export class RunManager extends EventEmitter {
       if (isNotFound(err)) return;
       throw err;
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-      const runDir = join(this.opts.storageRoot, entry.name);
-      const config = await readJsonIfExists<RunConfig>(join(runDir, RUN_CONFIG_FILE));
-      if (!config) continue;
-      if (config.status !== 'preparing' && config.status !== 'streaming') continue;
-      config.status = 'errored';
-      config.errorMessage = config.errorMessage ?? 'harness exited mid-run';
-      config.endedAt = config.endedAt ?? new Date().toISOString();
-      try {
-        await atomicWriteJson(join(runDir, RUN_CONFIG_FILE), config);
-        log.info('runManager.reap-stale-run', { runFolder: entry.name });
-      } catch (err) {
-        log.warn('runManager.reap-stale-run-failed', {
-          runFolder: entry.name,
-          error: (err as Error).message,
-        });
-      }
-    }
+    const candidates = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+    await Promise.all(
+      candidates.map(async (entry) => {
+        const runDir = join(this.opts.storageRoot, entry.name);
+        const config = await readJsonIfExists<RunConfig>(join(runDir, RUN_CONFIG_FILE));
+        if (!config) return;
+        if (config.status !== 'preparing' && config.status !== 'streaming') return;
+        config.status = 'errored';
+        config.errorMessage = config.errorMessage ?? 'harness exited mid-run';
+        config.endedAt = config.endedAt ?? new Date().toISOString();
+        try {
+          await atomicWriteJson(join(runDir, RUN_CONFIG_FILE), config);
+          log.info('runManager.reap-stale-run', { runFolder: entry.name });
+        } catch (err) {
+          log.warn('runManager.reap-stale-run-failed', {
+            runFolder: entry.name,
+            error: (err as Error).message,
+          });
+        }
+      }),
+    );
   }
 
   hasActive(): boolean {
@@ -498,8 +500,10 @@ export class RunManager extends EventEmitter {
       return;
     }
     const variantPath = join(runDir, RUN_VARIANT_FILE);
-    const variantContent = await readFile(variantPath, 'utf8').catch(() => '');
-    const bundle = await this.opts.session.readRunBundle(runFolder);
+    const [variantContent, bundle] = await Promise.all([
+      readFile(variantPath, 'utf8').catch(() => ''),
+      this.opts.session.readRunBundle(runFolder),
+    ]);
     const outputs = bundle?.outputs ?? [];
     try {
       const judgeFile = await runJudge({

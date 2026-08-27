@@ -35,8 +35,10 @@ export async function listDir(cwd: string, relPath: string): Promise<FsListResul
   if (!targetStat.isDirectory()) {
     throw new FsBrowserError(new Error(`not a directory: ${safePath}`), 'not-directory');
   }
-  const ig = await loadGitignore(cwd);
-  const raw = await readdir(target, { withFileTypes: true });
+  const [ig, raw] = await Promise.all([
+    loadGitignore(cwd),
+    readdir(target, { withFileTypes: true }),
+  ]);
   const out: FsEntry[] = [];
   for (const e of raw) {
     if (SKIP_ALWAYS.has(e.name)) continue;
