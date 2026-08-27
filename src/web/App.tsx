@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, type JSX } from 'react';
 import type { NormalizedEvent, ServerSseEvent } from '@shared/schemas/events.js';
 import type { ColumnConfig, SessionFile } from '@shared/schemas/session.js';
 import type { ColumnStatus } from '@shared/schemas/types.js';
@@ -501,7 +501,7 @@ export function App(): JSX.Element {
   }, [state.loaded, loadAll]);
 
   // Only blocks Start New (which needs to wipe everything) — individual columns run independently.
-  const anyRunning = useMemo(() => anyNonTerminal(state.activeStatuses), [state.activeStatuses]);
+  const anyRunning = anyNonTerminal(state.activeStatuses);
 
   const onPatchColumn = useCallback(
     async (columnId: string, patch: Partial<ColumnConfig>) => {
@@ -544,20 +544,20 @@ export function App(): JSX.Element {
     }
   }, []);
 
-  const onAddColumn = useCallback(async () => {
+  const onAddColumn = async () => {
     try {
       const s = await addColumn();
       dispatch({ type: 'session-patched', payload: s });
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, []);
+  };
 
   const onRequestRemoveColumn = useCallback((columnId: string) => {
     dispatch({ type: 'set-confirm-remove-column', columnId });
   }, []);
 
-  const onConfirmRemoveColumn = useCallback(async () => {
+  const onConfirmRemoveColumn = async () => {
     const columnId = state.confirmRemoveColumnId;
     dispatch({ type: 'set-confirm-remove-column', columnId: null });
     if (!columnId) return;
@@ -567,9 +567,9 @@ export function App(): JSX.Element {
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, [state.confirmRemoveColumnId]);
+  };
 
-  const onToggleMode = useCallback(async () => {
+  const onToggleMode = async () => {
     if (!state.session) return;
     try {
       const next = state.session.mode === 'read-only' ? 'write' : 'read-only';
@@ -578,9 +578,9 @@ export function App(): JSX.Element {
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, [state.session]);
+  };
 
-  const onToggleJudge = useCallback(async () => {
+  const onToggleJudge = async () => {
     if (!state.session) return;
     try {
       const s = await patchSession({ judgeEnabled: !state.session.judgeEnabled });
@@ -588,18 +588,18 @@ export function App(): JSX.Element {
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, [state.session]);
+  };
 
-  const onChangeJudgeModel = useCallback(async (judgeModel: string) => {
+  const onChangeJudgeModel = async (judgeModel: string) => {
     try {
       const s = await patchSession({ judgeModel });
       dispatch({ type: 'session-patched', payload: s });
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, []);
+  };
 
-  const onToggleUserScope = useCallback(async () => {
+  const onToggleUserScope = async () => {
     if (!state.session) return;
     try {
       const s = await patchSession({ userScopeEnabled: !state.session.userScopeEnabled });
@@ -607,9 +607,9 @@ export function App(): JSX.Element {
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, [state.session]);
+  };
 
-  const onStartNewConfirm = useCallback(async () => {
+  const onStartNewConfirm = async () => {
     dispatch({ type: 'set-confirm-start-new', open: false });
     try {
       await startNew();
@@ -617,7 +617,7 @@ export function App(): JSX.Element {
     } catch (err) {
       dispatch({ type: 'error', message: (err as Error).message });
     }
-  }, [loadAll]);
+  };
 
   if (!state.loaded) {
     return <div className="empty-hint">{state.connecting ? 'Loading…' : 'Not loaded.'}</div>;
@@ -634,12 +634,22 @@ export function App(): JSX.Element {
           </a>
         </Hint>
         <Hint content="Toggle write mode (applies to new runs; current runs keep their original mode)">
-          <button className="chip" aria-pressed={session.mode === 'write'} onClick={onToggleMode}>
+          <button
+            type="button"
+            className="chip"
+            aria-pressed={session.mode === 'write'}
+            onClick={onToggleMode}
+          >
             Mode: {session.mode === 'write' ? 'Write' : 'Read-only'}
           </button>
         </Hint>
         <div className="judge-chip-wrap">
-          <button className="chip" aria-pressed={session.judgeEnabled} onClick={onToggleJudge}>
+          <button
+            type="button"
+            className="chip"
+            aria-pressed={session.judgeEnabled}
+            onClick={onToggleJudge}
+          >
             Judge {session.judgeEnabled ? 'ON' : 'OFF'}
           </button>
           <div className="judge-popover" role="group" aria-label="Judge settings">
@@ -663,6 +673,7 @@ export function App(): JSX.Element {
         </div>
         <Hint content={<UserScopeHint />}>
           <button
+            type="button"
             className="chip"
             aria-pressed={session.userScopeEnabled}
             onClick={onToggleUserScope}
@@ -682,6 +693,7 @@ export function App(): JSX.Element {
           }
         >
           <button
+            type="button"
             className="chip"
             onClick={() => dispatch({ type: 'set-confirm-start-new', open: true })}
             disabled={anyRunning}
@@ -694,7 +706,9 @@ export function App(): JSX.Element {
       {state.error && (
         <div className="error-banner">
           {state.error}
-          <button onClick={() => dispatch({ type: 'clear-error' })}>dismiss</button>
+          <button type="button" onClick={() => dispatch({ type: 'clear-error' })}>
+            dismiss
+          </button>
         </div>
       )}
 
@@ -719,7 +733,7 @@ export function App(): JSX.Element {
         ))}
         {session.columns.length < 3 && (
           <Hint content="Add a column">
-            <button className="add-column" onClick={onAddColumn}>
+            <button type="button" className="add-column" onClick={onAddColumn}>
               <span className="add-column-glyph">+</span>
             </button>
           </Hint>
@@ -738,10 +752,13 @@ export function App(): JSX.Element {
               results, and outputs are gone for good.
             </p>
             <div className="actions">
-              <button onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}>
+              <button
+                type="button"
+                onClick={() => dispatch({ type: 'set-confirm-start-new', open: false })}
+              >
                 Cancel
               </button>
-              <button className="primary" onClick={onStartNewConfirm}>
+              <button type="button" className="primary" onClick={onStartNewConfirm}>
                 Wipe and start new
               </button>
             </div>
@@ -763,11 +780,12 @@ export function App(): JSX.Element {
             </p>
             <div className="actions">
               <button
+                type="button"
                 onClick={() => dispatch({ type: 'set-confirm-remove-column', columnId: null })}
               >
                 Cancel
               </button>
-              <button className="primary" onClick={onConfirmRemoveColumn}>
+              <button type="button" className="primary" onClick={onConfirmRemoveColumn}>
                 Remove column
               </button>
             </div>

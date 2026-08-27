@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import type { JudgeFile } from '@shared/schemas/judge.js';
 import type { RunConfig, TranscriptFile, OutputFile } from '@shared/schemas/run.js';
 import type { ColumnLiveState } from '../App.js';
@@ -33,29 +33,25 @@ export function TranscriptView(props: {
 
   const hasLive = props.live.events.length > 0;
 
-  const transcriptStartedMs = useMemo(() => {
+  const transcriptStartedMs = (() => {
     const iso = props.runBundle?.transcript?.startedAt;
     if (!iso) return 0;
     const parsed = Date.parse(iso);
     return Number.isFinite(parsed) ? parsed : 0;
-  }, [props.runBundle?.transcript?.startedAt]);
+  })();
 
-  const liveTurnTools = useMemo(() => computeLiveTurnTools(props.live.events), [props.live.events]);
-  const liveToolsByEventIdx = useMemo(
-    () => mapTurnToolsToEventIdx(props.live.events, (e) => e.kind === 'turn', liveTurnTools),
-    [props.live.events, liveTurnTools],
+  const liveTurnTools = computeLiveTurnTools(props.live.events);
+  const liveToolsByEventIdx = mapTurnToolsToEventIdx(
+    props.live.events,
+    (e) => e.kind === 'turn',
+    liveTurnTools,
   );
-  const transcriptEvents = useMemo(
-    () => collapseTranscriptEvents(props.runBundle?.transcript?.events ?? []),
-    [props.runBundle?.transcript?.events],
-  );
-  const transcriptTurnTools = useMemo(
-    () => computeNormalizedTurnTools(transcriptEvents),
-    [transcriptEvents],
-  );
-  const transcriptToolsByEventIdx = useMemo(
-    () => mapTurnToolsToEventIdx(transcriptEvents, (e) => e.t === 'turn', transcriptTurnTools),
-    [transcriptEvents, transcriptTurnTools],
+  const transcriptEvents = collapseTranscriptEvents(props.runBundle?.transcript?.events ?? []);
+  const transcriptTurnTools = computeNormalizedTurnTools(transcriptEvents);
+  const transcriptToolsByEventIdx = mapTurnToolsToEventIdx(
+    transcriptEvents,
+    (e) => e.t === 'turn',
+    transcriptTurnTools,
   );
 
   if (!hasLive && !props.runBundle?.transcript) {

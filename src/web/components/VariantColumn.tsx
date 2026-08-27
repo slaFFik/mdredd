@@ -122,6 +122,7 @@ export function VariantColumn(props: {
       <div className="column-header">
         <input
           type="text"
+          aria-label="Variant name"
           placeholder="Variant name (optional)"
           value={column.variantName}
           disabled={isLocked}
@@ -212,6 +213,7 @@ export function VariantColumn(props: {
               {creatingNew && (
                 <input
                   type="text"
+                  aria-label={`New ${column.variantType} name`}
                   placeholder={`new ${column.variantType} name (letters, numbers, _-)`}
                   value={column.skillOrAgentName ?? ''}
                   disabled={isLocked}
@@ -224,9 +226,11 @@ export function VariantColumn(props: {
               )}
               <Hint content="Rescan .claude/ for local skills/agents">
                 <button
+                  type="button"
                   className="remove-column"
+                  aria-label="Rescan local skills and agents"
                   onClick={() => void props.onReloadLocalVariants()}
-                  style={{ fontSize: 11 }}
+                  style={{ fontSize: 12 }}
                 >
                   ↻
                 </button>
@@ -253,7 +257,12 @@ export function VariantColumn(props: {
           <span style={{ flex: 1 }} />
           {canRemove && !isLocked && (
             <Hint content="Remove column and its associated content from the file system">
-              <button className="remove-column" onClick={() => void props.onRemove(column.id)}>
+              <button
+                type="button"
+                className="remove-column"
+                aria-label="Remove column"
+                onClick={() => void props.onRemove(column.id)}
+              >
                 ×
               </button>
             </Hint>
@@ -275,12 +284,12 @@ export function VariantColumn(props: {
 
       <div className="run-bar">
         {canStop ? (
-          <button className="stop" onClick={() => void props.onStop(column.id)}>
+          <button type="button" className="stop" onClick={() => void props.onStop(column.id)}>
             Stop
           </button>
         ) : (
           <Hint content={!column.prompt.trim() ? 'Fill in a prompt' : 'Run'}>
-            <button onClick={() => void props.onRun(column.id)} disabled={!canRun}>
+            <button type="button" onClick={() => void props.onRun(column.id)} disabled={!canRun}>
               Run
             </button>
           </Hint>

@@ -31,22 +31,19 @@ export function FilePickerModal(props: {
     if (props.open) void load('');
   }, [props.open, load]);
 
-  const pickFile = useCallback(
-    async (entry: FsEntry) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fsRead(entry.path);
-        props.onPick(res.path, res.content);
-        props.onClose();
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [props],
-  );
+  const pickFile = async (entry: FsEntry): Promise<void> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fsRead(entry.path);
+      props.onPick(res.path, res.content);
+      props.onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (!props.open) return null;
 
@@ -103,7 +100,9 @@ export function FilePickerModal(props: {
             ))}
         </div>
         <div className="actions">
-          <button onClick={props.onClose}>Cancel</button>
+          <button type="button" onClick={props.onClose}>
+            Cancel
+          </button>
         </div>
       </div>
     </div>

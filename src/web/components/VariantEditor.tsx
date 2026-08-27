@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type JSX } from 'react';
+import { useId, useRef, useState, type ChangeEvent, type JSX } from 'react';
 import { CollapseToggle } from './CollapseToggle.js';
 import { FilePickerModal } from './FilePickerModal.js';
 import { Hint } from './Hint.js';
@@ -11,6 +11,7 @@ export function VariantEditor(props: {
   onChange: (value: string) => void;
 }): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaId = useId();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [rendered, setRendered] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -30,7 +31,7 @@ export function VariantEditor(props: {
   return (
     <div className="variant-editor">
       <div className="row">
-        <label>Variant</label>
+        <label htmlFor={textareaId}>Variant</label>
         <span className="upload">
           <Hint content="Pick an existing file from this project — typically your current CLAUDE.md, a .claude/skills/<name>/SKILL.md, or .claude/agents/<name>.md.">
             <button type="button" disabled={props.disabled} onClick={() => setPickerOpen(true)}>
@@ -49,6 +50,7 @@ export function VariantEditor(props: {
           <input
             ref={inputRef}
             type="file"
+            aria-label="Upload variant file"
             style={{ display: 'none' }}
             onChange={onUpload}
             accept=".md,.txt"
@@ -62,6 +64,7 @@ export function VariantEditor(props: {
           <MarkdownView content={props.value} className="variant-rendered" />
         ) : (
           <textarea
+            id={textareaId}
             placeholder="Paste variant content (CLAUDE.md, SKILL.md, or agent .md)"
             value={props.value}
             disabled={props.disabled}

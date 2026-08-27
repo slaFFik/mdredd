@@ -1,16 +1,22 @@
 import type { JudgeFile, JudgeWarning } from '@shared/schemas/judge.js';
 import type { TokenUsage } from '@shared/schemas/run.js';
-import type { JSX, ReactNode } from 'react';
+import { Fragment, type JSX, type ReactNode } from 'react';
 import { Hint } from './Hint.js';
 import { formatCost, formatTokenCount } from '../lib/format.js';
 
-function renderRationale(text: string): ReactNode[] {
-  return text.split(/(`[^`]+`)/g).map((part, i) => {
-    if (part.length > 1 && part.startsWith('`') && part.endsWith('`')) {
-      return <code key={i}>{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
+function Rationale(props: { text: string }): JSX.Element {
+  const parts = props.text.split(/(`[^`]+`)/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.length > 1 && part.startsWith('`') && part.endsWith('`') ? (
+          <code key={i}>{part.slice(1, -1)}</code>
+        ) : (
+          <Fragment key={i}>{part}</Fragment>
+        ),
+      )}
+    </>
+  );
 }
 
 function ScoreRow(props: {
@@ -35,7 +41,7 @@ function ScoreRow(props: {
   );
   if (!props.rationale) return row as JSX.Element;
   return (
-    <Hint content={renderRationale(props.rationale)} side="left" align="center">
+    <Hint content={<Rationale text={props.rationale} />} side="left" align="center">
       {row}
     </Hint>
   );
@@ -115,7 +121,11 @@ export function JudgeCard(
           />
         </tbody>
       </table>
-      {j.rationale && <div className="rationale">{renderRationale(j.rationale)}</div>}
+      {j.rationale && (
+        <div className="rationale">
+          <Rationale text={j.rationale} />
+        </div>
+      )}
       <JudgeUsageFooter tokenUsage={j.tokenUsage} costUsd={j.costUsd} />
     </div>
   );
